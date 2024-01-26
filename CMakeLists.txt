@@ -15,6 +15,7 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/PybindHelper.cmake)
 add_subdirectory(third_party)
 
 pybind11_add_module(classic_control_envpool envpool2/classic_control/classic_control.cc)
-# target_link_libraries(classic_control_envpool PRIVATE glog::glog)
-target_include_directories(classic_control_envpool PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party ${CMAKE_CURRENT_SOURCE_DIR}/)
+target_link_libraries(classic_control_envpool PRIVATE glog::glog)
+target_include_directories(
+    classic_control_envpool PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/third_party/concurrentqueue)
 pybind_move_target(classic_control_envpool envpool2/classic_control)

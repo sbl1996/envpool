@@ -18,7 +18,7 @@ setup(
     version=__version__,
     packages=["envpool2"],
     long_description="",
-    requires=INSTALL_REQUIRES,
+    install_requires=INSTALL_REQUIRES,
     zip_safe=False,
     python_requires=">=3.7",
 )
