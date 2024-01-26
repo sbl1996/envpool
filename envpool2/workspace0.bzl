@@ -16,7 +16,6 @@
 
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 load("@bazel_tools//tools/build_defs/repo:utils.bzl", "maybe")
-load("//third_party/cuda:cuda.bzl", "cuda_configure")
 
 def workspace():
     """Load requested packages."""
@@ -172,18 +171,6 @@ def workspace():
 
     maybe(
         http_archive,
-        name = "gym3_libenv",
-        sha256 = "9a764d79d4215609c2612b2c84fec8bcea6609941bdcb7051f3335ed4576b8ef",
-        strip_prefix = "gym3-4c3824680eaf9dd04dce224ee3d4856429878226/gym3",
-        urls = [
-            "https://github.com/openai/gym3/archive/4c3824680eaf9dd04dce224ee3d4856429878226.zip",
-            "https://ml.cs.tsinghua.edu.cn/~jiayi/envpool/openai/gym3/4c3824680eaf9dd04dce224ee3d4856429878226.zip",
-        ],
-        build_file = "//third_party/gym3_libenv:gym3_libenv.BUILD",
-    )
-
-    maybe(
-        http_archive,
         name = "bazel_clang_tidy",
         sha256 = "ec8c5bf0c02503b928c2e42edbd15f75e306a05b2cae1f34a7bc84724070b98b",
         strip_prefix = "bazel_clang_tidy-783aa523aafb4a6798a538c61e700b6ed27975a7",
@@ -191,11 +178,6 @@ def workspace():
             "https://github.com/erenon/bazel_clang_tidy/archive/783aa523aafb4a6798a538c61e700b6ed27975a7.zip",
             "https://ml.cs.tsinghua.edu.cn/~jiayi/envpool/erenon/bazel_clang_tidy/783aa523aafb4a6798a538c61e700b6ed27975a7.zip",
         ],
-    )
-
-    maybe(
-        cuda_configure,
-        name = "cuda",
     )
 
 workspace0 = workspace
