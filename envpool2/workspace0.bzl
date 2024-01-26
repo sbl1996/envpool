@@ -148,18 +148,6 @@ def workspace():
 
     maybe(
         http_archive,
-        name = "zlib",
-        sha256 = "ff0ba4c292013dbc27530b3a81e1f9a813cd39de01ca5e0f8bf355702efa593e",
-        strip_prefix = "zlib-1.3",
-        urls = [
-            "https://github.com/madler/zlib/releases/download/v1.3/zlib-1.3.tar.gz",
-            "https://ml.cs.tsinghua.edu.cn/~jiayi/envpool/madler/zlib/zlib-1.3.tar.gz",
-        ],
-        build_file = "//third_party/zlib:zlib.BUILD",
-    )
-
-    maybe(
-        http_archive,
         name = "com_github_nelhage_rules_boost",
         # sha256 = "2215e6910eb763a971b1f63f53c45c0f2b7607df38c96287666d94d954da8cdc",
         strip_prefix = "rules_boost-e60cf50996da9fe769b6e7a31b88c54966ecb191",

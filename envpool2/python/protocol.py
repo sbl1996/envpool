@@ -230,6 +230,3 @@ class EnvPool(Protocol):
     env_id: Optional[np.ndarray] = None,
   ) -> Union[TimeStep, Tuple]:
     """Envpool reset interface."""
-
-  def xla(self) -> Tuple[Any, Callable, Callable, Callable]:
-    """Get the xla functions."""
