@@ -29,7 +29,7 @@
 #include <utility>
 #include <vector>
 
-#include "lightweightsemaphore.h"
+#include "concurrentqueue/lightweightsemaphore.h"
 
 template <typename V>
 class CircularBuffer {

@@ -31,7 +31,7 @@
 #include "envpool2/core/array.h"
 #include "envpool2/core/dict.h"
 #include "envpool2/core/spec.h"
-#include "lightweightsemaphore.h"
+#include "concurrentqueue/lightweightsemaphore.h"
 
 /**
  * Buffer of a batch of states, which is used as an intermediate storage device

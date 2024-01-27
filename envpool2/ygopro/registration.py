@@ -11,14 +11,17 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Entry point for all envs' registration."""
+"""Classic control env registration."""
 
-try:
-  import envpool2.classic_control.registration  # noqa: F401
-except ImportError:
-  pass
+from envpool2.registration import register
 
-try:
-  import envpool2.ygopro.registration  # noqa: F401
-except ImportError:
-  pass
+register(
+  task_id="YGOPro-v0",
+  import_path="envpool2.ygopro",
+  spec_cls="YGOProEnvSpec",
+  dm_cls="YGOProDMEnvPool",
+  gym_cls="YGOProGymEnvPool",
+  gymnasium_cls="YGOProGymnasiumEnvPool",
+  max_episode_steps=200,
+  reward_threshold=195.0,
+)

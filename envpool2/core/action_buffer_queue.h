@@ -27,7 +27,7 @@
 #include <vector>
 
 #include "envpool2/core/array.h"
-#include "lightweightsemaphore.h"
+#include "concurrentqueue/lightweightsemaphore.h"
 
 /**
  * Lock-free action buffer queue.

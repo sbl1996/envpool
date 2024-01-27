@@ -11,3 +11,16 @@
 [submodule "third_party/gflags"]
 	path = third_party/gflags
 	url = https://github.com/gflags/gflags.git
+[submodule "third_party/lua-cmake"]
+	path = third_party/lua-cmake
+	url = https://gitlab.com/codelibre/lua/lua-cmake.git
+[submodule "third_party/SQLiteCpp"]
+	path = third_party/SQLiteCpp
+	url = https://github.com/SRombauts/SQLiteCpp.git
+[submodule "third_party/ygopro-scripts"]
+	path = third_party/ygopro-scripts
+	url = https://github.com/Fluorohydride/ygopro-scripts.git
+[submodule "third_party/ygopro-core"]
+	path = third_party/ygopro-core
+	url = https://github.com/Fluorohydride/ygopro-core.git
+	ignore = dirty

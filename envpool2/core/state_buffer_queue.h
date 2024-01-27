@@ -29,7 +29,7 @@
 #include "envpool2/core/circular_buffer.h"
 #include "envpool2/core/spec.h"
 #include "envpool2/core/state_buffer.h"
-#include "lightweightsemaphore.h"
+#include "concurrentqueue/lightweightsemaphore.h"
 
 class StateBufferQueue {
  protected:

@@ -12,29 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "circular_buffer.h"
+#include "envpool2/ygopro/ygopro.h"
+#include "envpool2/core/py_envpool.h"
 
-#include <glog/logging.h>
-#include <gtest/gtest.h>
+using YGOProEnvSpec = PyEnvSpec<ygopro::YGOProEnvSpec>;
+using YGOProEnvPool = PyEnvPool<ygopro::YGOProEnvPool>;
 
-#include <random>
-#include <thread>
-
-TEST(CircularBufferTest, Basic) {
-  CircularBuffer<int> cb(100);
-  std::vector<int> number(100000);
-  for (auto& n : number) {
-    n = std::rand();
-  }
-  std::thread t_put([&]() {
-    for (auto& n : number) {
-      cb.Put(n);
-    }
-  });
-
-  for (auto& n : number) {
-    int r = cb.Get();
-    EXPECT_EQ(r, n);
-  }
-  t_put.join();
+PYBIND11_MODULE(ygopro_envpool, m) {
+  REGISTER(m, YGOProEnvSpec, YGOProEnvPool)
 }

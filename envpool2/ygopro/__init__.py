@@ -11,14 +11,26 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Entry point for all envs' registration."""
+"""Classic control env in EnvPool."""
 
-try:
-  import envpool2.classic_control.registration  # noqa: F401
-except ImportError:
-  pass
+from envpool2.python.api import py_env
 
-try:
-  import envpool2.ygopro.registration  # noqa: F401
-except ImportError:
-  pass
+from .ygopro_envpool import (
+  _YGOProEnvPool,
+  _YGOProEnvSpec,
+)
+
+(
+  YGOProEnvSpec,
+  YGOProDMEnvPool,
+  YGOProGymEnvPool,
+  YGOProGymnasiumEnvPool,
+) = py_env(_YGOProEnvSpec, _YGOProEnvPool)
+
+
+__all__ = [
+  "YGOProEnvSpec",
+  "YGOProDMEnvPool",
+  "YGOProGymEnvPool",
+  "YGOProGymnasiumEnvPool",
+]
