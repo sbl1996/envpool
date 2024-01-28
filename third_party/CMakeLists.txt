@@ -28,5 +28,5 @@ file(GLOB ycore_SRC CONFIGURE_DEPENDS
      "${YCORE_DIR}/*.h" "${YCORE_DIR}/*.cpp"
 )
 add_library(ycore SHARED ${ycore_SRC})
-target_include_directories(ycore PUBLIC ${YCORE_DIR})
+# target_include_directories(ycore PUBLIC ${YCORE_DIR})
 target_link_libraries(ycore PRIVATE lua_library)

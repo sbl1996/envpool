@@ -22,6 +22,4 @@ register(
   dm_cls="YGOProDMEnvPool",
   gym_cls="YGOProGymEnvPool",
   gymnasium_cls="YGOProGymnasiumEnvPool",
-  max_episode_steps=200,
-  reward_threshold=195.0,
 )
