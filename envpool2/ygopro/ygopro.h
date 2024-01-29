@@ -274,6 +274,7 @@ public:
     if (old_db != nullptr) {
       delete old_db;
     }
+    // std::cout << "Loaded " << deck1_.size() << " cards in deck 1" << std::endl;
   }
 
   bool IsDone() override { return done_; }
@@ -482,6 +483,7 @@ private:
     else if (msg_  == MSG_RETRY) {
       if (verbose_) {
         printf("Retry\n");
+        throw std::runtime_error("Retry");
       }
     }
     else if (msg_ == MSG_SELECT_YESNO) {

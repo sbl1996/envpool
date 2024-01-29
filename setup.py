@@ -1,4 +1,4 @@
-from setuptools import setup
+from setuptools import setup, find_packages
 
 __version__ = "0.0.1"
 
@@ -16,9 +16,9 @@ INSTALL_REQUIRES = [
 setup(
     name="envpool2",
     version=__version__,
-    packages=["envpool2"],
+    packages=find_packages(include='envpool2*'),
     long_description="",
     install_requires=INSTALL_REQUIRES,
-    zip_safe=False,
     python_requires=">=3.7",
+    include_package_data=True,
 )
