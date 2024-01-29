@@ -24,7 +24,7 @@ pybind_move_target(classic_control_envpool envpool2/classic_control)
 
 
 pybind11_add_module(ygopro_envpool envpool2/ygopro/ygopro.cc)
-target_link_libraries(ygopro_envpool PRIVATE glog::glog SQLiteCpp sqlite3 ycore)
+target_link_libraries(ygopro_envpool PRIVATE glog::glog SQLiteCpp sqlite3 ycore -static-libstdc++)
 target_include_directories(
     ygopro_envpool PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 pybind_move_target(ygopro_envpool envpool2/ygopro)

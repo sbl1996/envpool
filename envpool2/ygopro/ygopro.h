@@ -376,7 +376,10 @@ public:
     if (old_db != nullptr) {
       delete old_db;
     }
-    // std::cout << "Loaded " << deck1_.size() << " cards in deck 1" << std::endl;
+    if (verbose_) {
+      std::cout << "Loaded " << deck1_.size() << " cards in deck 1" << std::endl;
+      std::cout << "Loaded " << deck2_.size() << " cards in deck 2" << std::endl;
+    }
   }
 
   bool IsDone() override { return done_; }
