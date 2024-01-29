@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
 #include <fstream>
 #include <iostream>
 #include <functional>
@@ -42,7 +43,6 @@
 namespace ygopro {
 
 static SQLite::Database *db = nullptr;
-static std::unordered_map<uint32_t, card_data> cards;
 
 inline uint32 card_reader_callback(uint32 code, card_data *card) {
   SQLite::Statement query(*db, "SELECT * FROM datas WHERE id=?");
@@ -83,33 +83,100 @@ inline byte *script_reader_callback(const char *name, int *lenptr) {
   return buf;
 }
 
-inline card_data query_card_from_db(uint32_t code) {
-  SQLite::Statement query(*db, "SELECT * FROM datas WHERE id=?");
-  query.bind(1, code);
-  query.executeStep();
-  card_data card;
-  card.code = code;
-  card.alias = query.getColumn("alias");
-  card.setcode = query.getColumn("setcode").getInt64();
-  card.type = query.getColumn("type");
-  uint32_t level_ = query.getColumn("level");
-  card.level = level_ & 0xff;
-  card.lscale = (level_ >> 24) & 0xff;
-  card.rscale = (level_ >> 16) & 0xff;
-  card.attack = query.getColumn("atk");
-  card.defense = query.getColumn("def");
-  if (card.type & TYPE_LINK) {
-    card.link_marker = card.defense;
-    card.defense = 0;
-  } else {
-    card.link_marker = 0;
+class Card {
+  friend class YGOProEnv;
+
+protected:
+  uint32_t code_;
+  uint32_t alias_;
+  uint64_t setcode_;
+  uint32_t type_;
+  uint32_t level_;
+  uint32_t lscale_;
+  uint32_t rscale_;
+  int32_t attack_;
+  int32_t defense_;
+  uint32_t race_;
+  uint32_t attribute_;
+  uint32_t link_marker_;
+  // uint32_t category_;
+  std::string name_;
+  std::string desc_;
+  std::vector<std::string> strings_;
+
+  uint32_t data_ = 0;
+
+  int32_t controler_ = 0;
+  uint32_t location_ = 0;
+  uint32_t sequence_ = 0;
+  uint32_t position_ = 0;
+
+public:
+  Card(
+    uint32_t code, uint32_t alias, uint64_t setcode,
+    uint32_t type, uint32_t level, uint32_t lscale, uint32_t rscale,
+    int32_t attack, int32_t defense, uint32_t race, uint32_t attribute,
+    uint32_t link_marker, const std::string &name, const std::string &desc,
+    const std::vector<std::string> &strings) :
+    code_(code), alias_(alias), setcode_(setcode),
+    type_(type), level_(level), lscale_(lscale), rscale_(rscale),
+    attack_(attack), defense_(defense), race_(race), attribute_(attribute),
+    link_marker_(link_marker), name_(name), desc_(desc), strings_(strings) {}
+
+  void set_location(uint32_t location) {
+    controler_ = location & 0xff;
+    location_ = (location >> 8) & 0xff;
+    sequence_ = (location >> 16) & 0xff;
+    position_ = (location >> 24) & 0xff;
   }
-  card.race = query.getColumn("race");
-  card.attribute = query.getColumn("attribute");
-  return card;
+
+  const std::string &name() const { return name_; }
+  const std::string &desc() const { return desc_; }
+  const std::vector<std::string> &strings() const { return strings_; }
+};
+
+static std::unordered_map<uint32_t, Card> cards;
+
+inline Card query_card_from_db(uint32_t code) {
+  SQLite::Statement query1(*db, "SELECT * FROM datas WHERE id=?");
+  query1.bind(1, code);
+  query1.executeStep();
+
+  uint32_t alias = query1.getColumn("alias");
+  uint64_t setcode = query1.getColumn("setcode").getInt64();
+  uint32_t type = query1.getColumn("type");
+  uint32_t level_ = query1.getColumn("level");
+  uint32_t level = level_ & 0xff;
+  uint32_t lscale = (level_ >> 24) & 0xff;
+  uint32_t rscale = (level_ >> 16) & 0xff;
+  int32_t attack = query1.getColumn("atk");
+  int32_t defense = query1.getColumn("def");
+  uint32_t link_marker = 0;
+  if (type & TYPE_LINK) {
+    defense = 0;
+    link_marker = defense;
+  }
+  uint32_t race = query1.getColumn("race");
+  uint32_t attribute = query1.getColumn("attribute");
+
+  SQLite::Statement query2(*db, "SELECT * FROM texts WHERE id=?");
+  query2.bind(1, code);
+  query2.executeStep();
+  
+  std::string name = query2.getColumn(1);
+  std::string desc = query2.getColumn(2);
+  std::vector<std::string> strings;
+  for (int i = 3; i < query2.getColumnCount(); ++i) {
+    std::string str = query2.getColumn(i);
+    if (str.empty()) {
+      break;
+    }
+    strings.push_back(str);
+  }
+  return Card(code, alias, setcode, type, level, lscale, rscale, attack, defense, race, attribute, link_marker, name, desc, strings);
 }
 
-inline const card_data &get_card_from_db(uint32_t code) {
+inline const Card &get_card_from_db(uint32_t code) {
   // if not found, read from db and cache it
   auto it = cards.find(code);
   if (it == cards.end()) {
@@ -141,6 +208,33 @@ inline std::vector<uint32> read_deck(const std::string &fp) {
   }
 
   return deck;
+}
+
+inline std::string phase_to_string(int phase) {
+  switch (phase) {
+    case PHASE_DRAW:
+      return "draw phase";
+    case PHASE_STANDBY:
+      return "standby phase";
+    case PHASE_MAIN1:
+      return "main1 phase";
+    case PHASE_BATTLE_START:
+      return "battle start phase";
+    case PHASE_BATTLE_STEP:
+      return "battle step phase";
+    case PHASE_DAMAGE:
+      return "damage phase";
+    case PHASE_DAMAGE_CAL:
+      return "damage calculation phase";
+    case PHASE_BATTLE:
+      return "battle phase";
+    case PHASE_MAIN2:
+      return "main2 phase";
+    case PHASE_END:
+      return "end phase";
+    default:
+      return "Unknown";
+  }
 }
 
 class YGOProEnvFns {
@@ -186,6 +280,8 @@ public:
   }
 
   const int &init_lp() const { return init_lp_; }
+
+  const std::string &nickname() const { return nickname_; }
 
   virtual int think(const std::vector<std::string> &options) = 0;
 
@@ -250,6 +346,10 @@ protected:
   bool done_{true};
   bool duel_started_{false};
 
+  // turn player
+  int tp_;
+  int current_phase_;
+
   int msg_;
   std::vector<std::string> options_;
   int to_decide_;
@@ -259,6 +359,8 @@ protected:
   int dp_ = 0;
   int dl_ = 0;
   uint32_t res_;
+
+  byte query_buf_[4096];
 
 public:
   YGOProEnv(const Spec &spec, int env_id)
@@ -359,15 +461,15 @@ private:
     std::vector<std::pair<uint32_t, int>> fusion, xyz, synchro, link;
 
     for (auto code : deck) {
-      const card_data &cc = get_card_from_db(code);
-      if (cc.type & TYPE_FUSION) {
-        fusion.push_back({code, cc.level});
-      } else if (cc.type & TYPE_XYZ) {
-        xyz.push_back({code, cc.level});
-      } else if (cc.type & TYPE_SYNCHRO) {
-        synchro.push_back({code, cc.level});
-      } else if (cc.type & TYPE_LINK) {
-        link.push_back({code, cc.level});
+      const Card &cc = get_card_from_db(code);
+      if (cc.type_ & TYPE_FUSION) {
+        fusion.push_back({code, cc.level_});
+      } else if (cc.type_ & TYPE_XYZ) {
+        xyz.push_back({code, cc.level_});
+      } else if (cc.type_ & TYPE_SYNCHRO) {
+        synchro.push_back({code, cc.level_});
+      } else if (cc.type_ & TYPE_LINK) {
+        link.push_back({code, cc.level_});
       } else {
         c.push_back(code);
       }
@@ -447,12 +549,81 @@ private:
     return data_[dp_++];
   }
 
+  uint16_t read_u16() {
+    uint16_t v = 0;
+    for (int i = 0; i < 2; ++i) {
+      v |= data_[dp_++] << (i * 8);
+    }
+    return v;
+  }
+
   uint32 read_u32() {
     uint32 v = 0;
     for (int i = 0; i < 4; ++i) {
       v |= data_[dp_++] << (i * 8);
     }
     return v;
+  }
+
+  Card get_card(uint8_t player, uint8_t loc, uint8_t seq) {
+    int32_t flags = QUERY_CODE | QUERY_ATTACK | QUERY_DEFENSE | QUERY_POSITION | QUERY_LEVEL | QUERY_RANK | QUERY_LSCALE | QUERY_RSCALE | QUERY_LINK;
+    int32_t bl = query_card(pduel_, player, loc, seq, flags, query_buf_, 0);
+    if (bl <= 0) {
+      throw std::runtime_error("Invalid card");
+    }
+    uint32_t f = read_u32();
+    if (f == 4) {
+      throw std::runtime_error("Invalid card");
+    }
+    f = read_u32();
+    uint32_t code = read_u32();
+    Card c = get_card_from_db(code);
+    uint32_t position = read_u32();
+    c.set_location(position);
+    uint32_t level = read_u32();
+    if ((level & 0xff) > 0) {
+      c.level_ = level & 0xff;
+    }
+    uint32_t rank = read_u32();
+    if ((rank & 0xff) > 0) {
+      c.level_ = rank & 0xff;
+    }
+    c.attack_ = read_u32();
+    c.defense_ = read_u32();
+    c.lscale_ = read_u32();
+    c.rscale_ = read_u32();
+    uint32_t link = read_u32();
+    uint32_t link_marker = read_u32();
+    if ((link & 0xff) > 0) {
+      c.level_ = link & 0xff;
+    }
+    if (link_marker > 0) {
+      c.defense_ = link_marker;
+    }
+    return c;
+  }
+
+  std::vector<Card> read_cardlist(bool extra = false, bool extra8 = false) {
+    std::vector<Card> cards;
+    auto count = read_u8();
+    cards.reserve(count);
+    for (int i = 0; i < count; ++i) {
+      auto code = read_u32();
+      auto controller = read_u8();
+      auto loc = read_u8();
+      auto seq = read_u8();
+      auto card = get_card(controller, loc, seq);
+      if (extra) {
+        if (extra8) {
+          card.data_ = read_u8();
+        }
+        else {
+          card.data_ = read_u32();
+        }
+      }
+      cards.push_back(card);
+    }
+    return cards;
   }
 
   void handle_message() {
@@ -475,15 +646,28 @@ private:
       pl->notify("Drew " + std::to_string(drawed) + " cards:");
       for (int i = 0; i < drawed; ++i) {
         const auto &c = get_card_from_db(codes[i]);
-        pl->notify(std::to_string(i + 1) + ": " + std::to_string(c.code));
+        pl->notify(std::to_string(i + 1) + ": " + c.name_);
       }
       const auto &op = players_[1 - player];
       op->notify("Opponent drew " + std::to_string(drawed) + " cards.");
     }
-    else if (msg_  == MSG_RETRY) {
-      if (verbose_) {
-        printf("Retry\n");
-        throw std::runtime_error("Retry");
+    else if (msg_ == MSG_NEW_TURN) {
+      tp_ = int(read_u8());
+      if (!verbose_) {
+        return;
+      }
+      auto player = players_[tp_];
+      player->notify("Your turn.");
+      players_[1 - tp_]->notify(player->nickname() + "'s turn.");
+    }
+    else if (msg_ == MSG_NEW_PHASE) {
+      current_phase_ = int(read_u16());
+      if (!verbose_) {
+        return;
+      }
+      auto phase_str = phase_to_string(current_phase_);
+      for (int i = 0; i < 2; ++i) {
+        players_[i]->notify("entering " + phase_str + ".");
       }
     }
     else if (msg_ == MSG_SELECT_YESNO) {
@@ -503,9 +687,47 @@ private:
       };
       callback_ = callback;
     }
+    else if (msg_ == MSG_SELECT_IDLECMD) {
+      int32_t player = read_u8();
+      auto summonable = read_cardlist();
+      auto spsummon = read_cardlist();
+      auto repos = read_cardlist();
+      auto idle_mset = read_cardlist();
+      auto idle_set = read_cardlist();
+      auto idle_activate = read_cardlist();
+      bool to_bp = read_u8();
+      bool to_ep = read_u8();
+      read_u8(); // cs
+
+      auto pl = players_[player];
+      
+    }
+    else if (msg_ == MSG_HINT) {
+      auto hint_type = int(read_u8());
+      auto player = read_u8();
+      auto value = read_u32();
+      if (!verbose_) {
+        return;
+      }
+      if (hint_type == 3) {
+        players_[player]->notify("TODO: system string " + std::to_string(value));
+      }
+      else if (hint_type == 9) {
+        players_[1-player]->notify("Choice of player: [" + std::to_string(value) + "]");
+      }
+      else {
+        printf("Unknown hint type %d with value %d\n", hint_type, value);
+      }
+    }
+    else if (msg_  == MSG_RETRY) {
+      if (verbose_) {
+        printf("Retry\n");
+        throw std::runtime_error("Retry");
+      }
+    }
     else {
       if (verbose_) {
-        printf("Unknown message %d\n", msg_);
+        printf("Unknown message %d, length %d, dp %d\n", msg_, dl_, dp_);
       }
       dp_ = dl_;
     }
