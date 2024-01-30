@@ -407,7 +407,11 @@ static std::unordered_map<uint32_t, Card> cards;
 inline Card query_card_from_db(uint32_t code) {
   SQLite::Statement query1(*db, "SELECT * FROM datas WHERE id=?");
   query1.bind(1, code);
-  query1.executeStep();
+  bool found = query1.executeStep();
+  if (!found) {
+    std::string msg = "Card not found: " + std::to_string(code);
+    throw std::runtime_error(msg);
+  }
 
   uint32_t alias = query1.getColumn("alias");
   uint64_t setcode = query1.getColumn("setcode").getInt64();
@@ -675,6 +679,7 @@ protected:
   uint32_t res_;
 
   byte query_buf_[4096];
+  int qdp_ = 0;
 
   byte resp_buf_[128];
 
@@ -899,37 +904,46 @@ private:
     return v;
   }
 
+  uint32 q_read_u32() {
+    uint32 v = 0;
+    for (int i = 0; i < 4; ++i) {
+      v |= query_buf_[qdp_++] << (i * 8);
+    }
+    return v;
+  }
+
   Card get_card(uint8_t player, uint8_t loc, uint8_t seq) {
     int32_t flags = QUERY_CODE | QUERY_ATTACK | QUERY_DEFENSE | QUERY_POSITION |
                     QUERY_LEVEL | QUERY_RANK | QUERY_LSCALE | QUERY_RSCALE |
                     QUERY_LINK;
     int32_t bl = query_card(pduel_, player, loc, seq, flags, query_buf_, 0);
+    qdp_ = 0;
     if (bl <= 0) {
       throw std::runtime_error("Invalid card");
     }
-    uint32_t f = read_u32();
-    if (f == 4) {
+    uint32_t f = q_read_u32();
+    if (f == LEN_EMPTY) {
       throw std::runtime_error("Invalid card");
     }
-    f = read_u32();
-    uint32_t code = read_u32();
+    f = q_read_u32();
+    uint32_t code = q_read_u32();
     Card c = get_card_from_db(code);
-    uint32_t position = read_u32();
+    uint32_t position = q_read_u32();
     c.set_location(position);
-    uint32_t level = read_u32();
+    uint32_t level = q_read_u32();
     if ((level & 0xff) > 0) {
       c.level_ = level & 0xff;
     }
-    uint32_t rank = read_u32();
+    uint32_t rank = q_read_u32();
     if ((rank & 0xff) > 0) {
       c.level_ = rank & 0xff;
     }
-    c.attack_ = read_u32();
-    c.defense_ = read_u32();
-    c.lscale_ = read_u32();
-    c.rscale_ = read_u32();
-    uint32_t link = read_u32();
-    uint32_t link_marker = read_u32();
+    c.attack_ = q_read_u32();
+    c.defense_ = q_read_u32();
+    c.lscale_ = q_read_u32();
+    c.rscale_ = q_read_u32();
+    uint32_t link = q_read_u32();
+    uint32_t link_marker = q_read_u32();
     if ((link & 0xff) > 0) {
       c.level_ = link & 0xff;
     }
@@ -1158,6 +1172,101 @@ private:
       } else {
         printf("Unknown hint type %d with value %d\n", hint_type, value);
       }
+    } else if (msg_ == MSG_CARD_HINT) {
+      if (!verbose_) {
+        dp_ = dl_;
+        return;
+      }
+      uint8_t player = read_u8();
+      uint8_t loc = read_u8();
+      uint8_t seq = read_u8();
+      uint8_t pos = read_u8();
+      printf("player: %d, loc: %d, seq: %d, pos: %d\n", player, loc, seq, pos);
+      uint8_t type = read_u8();
+      uint32_t value = read_u32();
+      Card card = get_card(player, loc, seq);
+      if (type == CHINT_RACE) {
+        std::string races_str = "TODO";
+        for (int pl = 0; pl < 2; pl++) {
+          players_[pl]->notify(card.get_spec(pl) + " (" + card.name_ + ") selected " + races_str + ".");
+        }
+      } else if (type == CHINT_ATTRIBUTE) {
+        std::string attributes_str = "TODO";
+        for (int pl = 0; pl < 2; pl++) {
+          players_[pl]->notify(card.get_spec(pl) + " (" + card.name_ + ") selected " + attributes_str + ".");
+        }
+      } else {
+        printf("Unknown card hint type %d with value %d\n", type, value);
+      }
+    } else if (msg_ == MSG_POS_CHANGE) {
+      if (!verbose_) {
+        dp_ = dl_;
+        return;
+      }
+      uint32_t code = read_u32();
+      Card card = get_card_from_db(code);
+      card.set_location(read_u32());
+      uint8_t prevpos = card.position_;
+      card.position_ = read_u8();
+
+      auto pl = players_[card.controler_];
+      auto op = players_[1 - card.controler_];
+      auto plspec = card.get_spec(false);
+      auto opspec = card.get_spec(true);
+      auto prevpos_str = position_to_string(prevpos, card.location_);
+      auto pos_str = position_to_string(card.position_, card.location_);
+      pl->notify("The position of card " + plspec + " (" + card.name_ + ") changed from " +
+                  prevpos_str + " to " + pos_str + ".");
+      op->notify("The position of card " + opspec + " (" + card.name_ + ") changed from " +
+                  prevpos_str + " to " + pos_str + ".");
+    } else if (msg_ == MSG_SUMMONED) {
+      dp_ = dl_;
+    } else if (msg_ == MSG_SUMMONING) {
+      if (!verbose_) {
+        dp_ = dl_;
+        return;
+      }
+      uint32_t code = read_u32();
+      Card card = get_card_from_db(code);
+      card.set_location(read_u32());
+      const auto &nickname = players_[card.controler_]->nickname();
+      for (auto pl : players_) {
+        pl->notify(
+          nickname + " summoning " + card.name_ + " (" +
+          std::to_string(card.attack_) + "/" + std::to_string(card.defense_) +
+          ") in " + card.get_position() + " position.");
+      }
+    } else if (msg_ == MSG_SPSUMMONED) {
+      dp_ = dl_;
+    } else if (msg_ == MSG_SPSUMMONING) {
+      if (!verbose_) {
+        dp_ = dl_;
+        return;
+      }
+      uint32_t code = read_u32();
+      Card card = get_card_from_db(code);
+      card.set_location(read_u32());
+      const auto &nickname = players_[card.controler_]->nickname();
+      for (auto pl : players_) {
+        auto pos = card.get_position();
+        auto atk = std::to_string(card.attack_);
+        auto def = std::to_string(card.defense_);
+        if (card.type_ & TYPE_LINK) {
+          pl->notify(
+            nickname + " special summoning " + card.name_ + " (" + atk + ") in " + pos + " position.");
+        } else {
+          pl->notify(
+            nickname + " special summoning " + card.name_ + " (" + atk + "/" + def + ") in " + pos + " position.");
+        }
+      }
+    } else if (msg_ == MSG_CHAIN_SOLVED) {
+      dp_ = dl_;
+    } else if (msg_ == MSG_CHAIN_SOLVING) {
+      dp_ = dl_;
+    } else if (msg_ == MSG_CHAINED) {
+      dp_ = dl_;
+    } else if (msg_ == MSG_CHAIN_END) {
+      dp_ = dl_;      
     } else if (msg_ == MSG_CHAINING) {
       if (!verbose_) {
         dp_ = dl_;
@@ -1175,7 +1284,7 @@ private:
       auto o = 1 - c;
       chaining_player_ = c;
       players_[c]->notify("Activating " + card.get_spec(c) + " (" + card.name_ + ")");
-      players_[o]->notify(players_[o]->nickname_ + " activating " + card.get_spec(o) + " (" + card.name_ + ")");
+      players_[o]->notify(players_[c]->nickname_ + " activating " + card.get_spec(o) + " (" + card.name_ + ")");
     } else if (msg_ == MSG_RETRY) {
       if (verbose_) {
         printf("Retry\n");
@@ -1414,25 +1523,22 @@ private:
           pl->notify(option + ": Special summon " + name + ".");
         }
       }
-      std::map<uint32_t, int> idle_activate_count;
-      for (const auto &card : idle_activate_) {
-        auto [code, spec, data] = card;
-        idle_activate_count[code] += 1;
+      std::map<std::string, int> idle_activate_count;
+      for (const auto &[code, spec, data] : idle_activate_) {
+        printf("code: %d, spec: %s, data: %d\n", code, spec.c_str(), data);
+        idle_activate_count[spec] += 1;
       }
-      for (const auto &card : idle_activate_) {
-        auto [code, spec, data] = card;
-        int count = idle_activate_count[code];
+      for (const auto &[code, spec, data] : idle_activate_) {
+        int count = idle_activate_count[spec];
         if (count > 1) {
           Card card = get_card_from_db(code);
-          printf("Warning: %s has %d effects\n", card.name_.c_str(), count);
+          printf("%s has %d effects\n", card.name_.c_str(), count);
           throw std::runtime_error("Activate more than one effect.");
         }
         std::string option = "v " + spec;
         options_.push_back(option);
         if (verbose_) {
-          // TODO: effect description
-          pl->notify(option + ": Activate " + get_card_from_db(code).name_ +
-                     ".");
+          pl->notify(option + ": " + get_card_from_db(code).get_effect_description(data));
         }
       }
 
