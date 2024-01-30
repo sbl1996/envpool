@@ -38,6 +38,7 @@
 
 #include <SQLiteCpp/SQLiteCpp.h>
 #include <SQLiteCpp/VariadicBind.h>
+#include <utility>
 #include <vector>
 
 namespace ygopro {
@@ -112,6 +113,8 @@ protected:
   uint32_t position_ = 0;
 
 public:
+  Card() = default;
+
   Card(
     uint32_t code, uint32_t alias, uint64_t setcode,
     uint32_t type, uint32_t level, uint32_t lscale, uint32_t rscale,
@@ -122,6 +125,8 @@ public:
     type_(type), level_(level), lscale_(lscale), rscale_(rscale),
     attack_(attack), defense_(defense), race_(race), attribute_(attribute),
     link_marker_(link_marker), name_(name), desc_(desc), strings_(strings) {}
+
+  ~Card() = default;
 
   void set_location(uint32_t location) {
     controler_ = location & 0xff;
@@ -236,6 +241,82 @@ inline std::string phase_to_string(int phase) {
       return "Unknown";
   }
 }
+
+inline std::vector<std::string> flag_to_usable_cardspecs(uint32_t flag, bool reverse = false) {
+    uint32_t pm = flag & 0xff;
+    uint32_t ps = (flag >> 8) & 0xff;
+    uint32_t om = (flag >> 16) & 0xff;
+    uint32_t os = (flag >> 24) & 0xff;
+    std::string zone_names[4] = {"m", "s", "om", "os"};
+    uint32_t values[4] = {pm, ps, om, os};
+    std::vector<std::string> specs;
+    for (int j = 0; j < 4; j++) {
+        for (int i = 0; i < 8; i++) {
+            bool avail;
+            if (reverse) {
+                avail = values[j] & ((1 << i) != 0);
+            } else {
+                avail = values[j] & ((1 << i) == 0);
+            }
+            if (avail) {
+                specs.push_back(zone_names[j] + std::to_string(i + 1));
+            }
+        }
+    }
+    return specs;
+}
+
+inline std::string ls_to_spec(uint8_t loc, uint8_t seq) {
+  std::string spec;
+  if (loc == LOCATION_HAND) {
+    spec += "h";
+  }
+  else if (loc == LOCATION_MZONE) {
+    spec += "m";
+  }
+  else if (loc == LOCATION_SZONE) {
+    spec += "s";
+  }
+  else if (loc == LOCATION_GRAVE) {
+    spec += "g";
+  }
+  else if (loc == LOCATION_REMOVED) {
+    spec += "r";
+  }
+  else if (loc == LOCATION_EXTRA) {
+    spec += "x";
+  }
+  spec += std::to_string(seq + 1);
+  return spec;
+}
+
+inline std::tuple<uint8_t, uint8_t> sepc_to_ls(const std::string spec) {
+  uint8_t loc;
+  uint8_t seq;
+  if (spec[0] == 'h') {
+    loc = LOCATION_HAND;
+  }
+  else if (spec[0] == 'm') {
+    loc = LOCATION_MZONE;
+  }
+  else if (spec[0] == 's') {
+    loc = LOCATION_SZONE;
+  }
+  else if (spec[0] == 'g') {
+    loc = LOCATION_GRAVE;
+  }
+  else if (spec[0] == 'r') {
+    loc = LOCATION_REMOVED;
+  }
+  else if (spec[0] == 'x') {
+    loc = LOCATION_EXTRA;
+  }
+  else {
+    throw std::runtime_error("Invalid location");
+  }
+  seq = std::stoi(spec.substr(1)) - 1;
+  return {loc, seq};
+} 
 
 class YGOProEnvFns {
 public:
@@ -362,6 +443,20 @@ protected:
 
   byte query_buf_[4096];
 
+  byte resp_buf_[128];
+
+  using IdleCardSpec = std::tuple<uint32_t, std::string, uint32_t>;
+
+  // select_idlecmd
+  std::vector<IdleCardSpec> summonable_;
+  std::vector<IdleCardSpec> spsummon_;
+  std::vector<IdleCardSpec> repos_;
+  std::vector<IdleCardSpec> idle_mset_;
+  std::vector<IdleCardSpec> idle_set_;
+  std::vector<IdleCardSpec> idle_activate_;
+  bool to_bp_;
+  bool to_ep_;
+
 public:
   YGOProEnv(const Spec &spec, int env_id)
       : Env<YGOProEnvSpec>(spec, env_id),
@@ -426,7 +521,6 @@ public:
   }
 
   void Step(const Action &action) override {
-    done_ = (++elapsed_step_ >= max_episode_steps_);
     int act = action["action"_];
 
     callback_(act);
@@ -434,9 +528,9 @@ public:
       printf("Msg: %d\n", msg_);
       printf("Player %d chose %s in [", to_decide_, options_[act].c_str());
       for (const auto &option : options_) {
-        printf(" %s", option.c_str());
+        printf(" %s,", option.c_str());
       }
-      printf("]\n");
+      printf(" ]\n");
     }
 
     next(false);
@@ -629,8 +723,34 @@ private:
     return cards;
   }
 
+  std::vector<IdleCardSpec> read_cardlist_spec(bool extra = false, bool extra8 = false) {
+    std::vector<IdleCardSpec> card_specs;
+    auto count = read_u8();
+    card_specs.reserve(count);
+    for (int i = 0; i < count; ++i) {
+      auto code = read_u32();
+      auto controller = read_u8();
+      auto loc = read_u8();
+      auto seq = read_u8();
+      uint32_t data = -1;
+      if (extra) {
+        if (extra8) {
+          data = read_u8();
+        }
+        else {
+          data = read_u32();
+        }
+      }
+      card_specs.push_back({code, ls_to_spec(loc, seq), data});
+    }
+    return card_specs;
+  }
+
   void handle_message() {
     msg_ = int(data_[dp_++]);
+    if (verbose_) {
+      printf("Msg: %d, dp: %d, dl: %d\n", msg_, dp_, dl_);
+    }
     options_ = {};
     if (msg_ == MSG_DRAW) {
       auto player = read_u8();
@@ -692,18 +812,212 @@ private:
     }
     else if (msg_ == MSG_SELECT_IDLECMD) {
       int32_t player = read_u8();
-      auto summonable = read_cardlist();
-      auto spsummon = read_cardlist();
-      auto repos = read_cardlist();
-      auto idle_mset = read_cardlist();
-      auto idle_set = read_cardlist();
-      auto idle_activate = read_cardlist();
-      bool to_bp = read_u8();
-      bool to_ep = read_u8();
-      read_u8(); // cs
+      summonable_ = read_cardlist_spec();
+      spsummon_ = read_cardlist_spec();
+      repos_ = read_cardlist_spec();
+      idle_mset_ = read_cardlist_spec();
+      idle_set_ = read_cardlist_spec();
+      idle_activate_ = read_cardlist_spec();
+      to_bp_ = read_u8();
+      to_ep_ = read_u8();
+      read_u8(); // can_shuffle
 
       auto pl = players_[player];
-      
+      if (verbose_) {
+        pl->notify("Select a card and action to perform.");
+      }
+      for (const auto &card : summonable_) {
+        auto [code, spec, data] = card;
+        std::string option = "s " + spec;
+        options_.push_back(option);
+        if (verbose_) {
+          const auto &name = get_card_from_db(code).name_;
+          pl->notify(option + ": Summon " + name + " in face-up attack position.");
+        }
+      }
+      for (const auto &card : idle_set_) {
+        auto [code, spec, data] = card;
+        std::string option = "t " + spec;
+        options_.push_back(option);
+        if (verbose_) {
+          const auto &name = get_card_from_db(code).name_;
+          pl->notify(option + ": Set " + name + ".");
+        }
+      }
+      for (const auto &card : idle_mset_) {
+        auto [code, spec, data] = card;
+        std::string option = "m " + spec;
+        options_.push_back(option);
+        if (verbose_) {
+          const auto &name = get_card_from_db(code).name_;
+          pl->notify(option + ": Summon " + name + " in face-down defense position.");
+        }
+      }
+      for (const auto &card : repos_) {
+        auto [code, spec, data] = card;
+        std::string option = "r " + spec;
+        options_.push_back(option);
+        if (verbose_) {
+          const auto &name = get_card_from_db(code).name_;
+          pl->notify(option + ": Reposition " + name + ".");
+        }
+      }
+      for (const auto &card : spsummon_) {
+        auto [code, spec, data] = card;
+        std::string option = "c " + spec;
+        options_.push_back(option);
+        if (verbose_) {
+          const auto &name = get_card_from_db(code).name_;
+          pl->notify(option + ": Special summon " + name + ".");
+        }
+      }
+      std::map<uint32_t, int> idle_activate_count;
+      for (const auto &card : idle_activate_) {
+        auto [code, spec, data] = card;
+        idle_activate_count[code] += 1;
+      }
+      for (const auto &card : idle_activate_) {
+        auto [code, spec, data] = card;
+        int count = idle_activate_count[code];
+        if (count > 1) {
+          throw std::runtime_error("Activate more than one effect.");
+        }
+        std::string option = "v " + spec;
+        options_.push_back(option);
+        if (verbose_) {
+          // TODO: effect description
+          pl->notify(option + ": Activate " + get_card_from_db(code).name_ + ".");
+        }
+      }
+
+      if (to_bp_) {
+        std::string cmd = "b";
+        options_.push_back(cmd);
+        if (verbose_) {
+          pl->notify(cmd + ": Enter the battle phase.");
+        }
+      }
+      if (to_ep_) {
+        if (!to_bp_) {
+          std::string cmd = "e";
+          options_.push_back(cmd);
+          if (verbose_) {
+            pl->notify(cmd + ": End phase.");
+          }
+        }
+      }
+      auto callback = [this](int idx) {
+        const auto &option = options_[idx];
+        char cmd = option[0];
+        if (cmd == 'b') {
+          set_responsei(pduel_, 6);
+        }
+        else if (cmd == 'e') {
+          set_responsei(pduel_, 7);
+        }
+        else {
+          auto spec = option.substr(2);
+          if (cmd == 's') {
+            auto it = std::find_if(summonable_.begin(), summonable_.end(), [&](const auto &card) {
+              return std::get<1>(card) == spec;
+            });
+            if (it == summonable_.end()) {
+              throw std::runtime_error("Invalid option for summon");
+            }
+            uint32_t idx = std::distance(summonable_.begin(), it);
+            set_responsei(pduel_, idx << 16);
+          }
+          else if (cmd == 't') {
+            auto it = std::find_if(idle_set_.begin(), idle_set_.end(), [&](const auto &card) {
+              return std::get<1>(card) == spec;
+            });
+            if (it == idle_set_.end()) {
+              throw std::runtime_error("Invalid option for set");
+            }
+            uint32_t idx = std::distance(idle_set_.begin(), it);
+            set_responsei(pduel_, (idx << 16) + 4);
+          }
+          else if (cmd == 'm') {
+            auto it = std::find_if(idle_mset_.begin(), idle_mset_.end(), [&](const auto &card) {
+              return std::get<1>(card) == spec;
+            });
+            if (it == idle_mset_.end()) {
+              throw std::runtime_error("Invalid option for mset");
+            }
+            uint32_t idx = std::distance(idle_mset_.begin(), it);
+            set_responsei(pduel_, (idx << 16) + 3);
+          }
+          else if (cmd == 'r') {
+            auto it = std::find_if(repos_.begin(), repos_.end(), [&](const auto &card) {
+              return std::get<1>(card) == spec;
+            });
+            if (it == repos_.end()) {
+              throw std::runtime_error("Invalid option for repos");
+            }
+            uint32_t idx = std::distance(repos_.begin(), it);
+            set_responsei(pduel_, (idx << 16) + 2);
+          }
+          else if (cmd == 'c') {
+            auto it = std::find_if(spsummon_.begin(), spsummon_.end(), [&](const auto &card) {
+              return std::get<1>(card) == spec;
+            });
+            if (it == spsummon_.end()) {
+              throw std::runtime_error("Invalid option for spsummon");
+            }
+            uint32_t idx = std::distance(spsummon_.begin(), it);
+            set_responsei(pduel_, (idx << 16) + 1);
+          }
+          else if (cmd == 'v') {
+            auto it = std::find_if(idle_activate_.begin(), idle_activate_.end(), [&](const auto &card) {
+              return std::get<1>(card) == spec;
+            });
+            if (it == idle_activate_.end()) {
+              throw std::runtime_error("Invalid option for activate");
+            }
+            uint32_t idx = std::distance(idle_activate_.begin(), it);
+            set_responsei(pduel_, (idx << 16) + 5);
+          }
+          else {
+            throw std::runtime_error("Invalid option: " + option);
+          }
+        }
+      };
+      callback_ = callback;
+    }
+    else if (msg_ == MSG_SELECT_PLACE) {
+      auto player = read_u8();
+      auto count = read_u8();
+      if (count == 0) {
+        count = 1;
+      }
+      auto flag = read_u32();
+      options_ = flag_to_usable_cardspecs(flag);
+      if (verbose_) {
+        std::string specs_str = options_[0];
+        for (int i = 1; i < options_.size(); ++i) {
+          specs_str += ", " + options_[i];
+        }
+        if (count == 1) {
+          players_[player]->notify("Select place for card, one of " + specs_str + ".");
+        }
+        else {
+          players_[player]->notify("Select " + std::to_string(count) + " places for card, from " + specs_str + ".");
+        }
+      }
+      callback_ = [this, player1 = player](int idx) {
+        printf("Select place %d, player %d\n", idx, player1);
+        std::string spec = options_[idx];
+        auto plr = player1;
+        if (spec[0] == 'o') {
+          plr = 1 - player1;
+          spec = spec.substr(1);
+        }
+        auto [loc, seq] = sepc_to_ls(spec);
+        resp_buf_[0] = plr;
+        resp_buf_[1] = loc;
+        resp_buf_[2] = seq;
+        set_responseb(pduel_, resp_buf_);
+      };
     }
     else if (msg_ == MSG_HINT) {
       auto hint_type = int(read_u8());
@@ -712,10 +1026,16 @@ private:
       if (!verbose_) {
         return;
       }
-      if (hint_type == 3) {
-        players_[player]->notify("TODO: system string " + std::to_string(value));
+      if (hint_type == HINT_SELECTMSG) {
+        if (value > 2000) {
+          uint32_t code = value;
+          players_[player]->notify(std::to_string(player) + " select " + get_card_from_db(code).name_);
+        }
+        else {
+          players_[player]->notify("TODO: system string " + std::to_string(value));
+        }
       }
-      else if (hint_type == 9) {
+      else if (hint_type == HINT_NUMBER) {
         players_[1-player]->notify("Choice of player: [" + std::to_string(value) + "]");
       }
       else {
