@@ -340,13 +340,16 @@ inline std::string msg_to_string(int msg) {
     }
 }
 
-
 using PlayerId = uint8_t;
 
-static SQLite::Database *db = nullptr;
+static SQLite::Database *lib_db = nullptr;
+static std::shared_timed_mutex lib_db_mtx;
+
+static std::shared_timed_mutex duel_mtx;
 
 inline uint32 card_reader_callback(uint32 code, card_data *card) {
-  SQLite::Statement query(*db, "SELECT * FROM datas WHERE id=?");
+  std::shared_lock<std::shared_timed_mutex> lock(lib_db_mtx);
+  SQLite::Statement query(*lib_db, "SELECT * FROM datas WHERE id=?");
   query.bind(1, code);
   query.executeStep();
   card->code = code;
@@ -482,67 +485,6 @@ public:
   }
 };
 
-
-inline Card query_card_from_db(uint32_t code) {
-  SQLite::Statement query1(*db, "SELECT * FROM datas WHERE id=?");
-  query1.bind(1, code);
-  bool found = query1.executeStep();
-  if (!found) {
-    std::string msg = "Card not found: " + std::to_string(code);
-    throw std::runtime_error(msg);
-  }
-
-  uint32_t alias = query1.getColumn("alias");
-  uint64_t setcode = query1.getColumn("setcode").getInt64();
-  uint32_t type = query1.getColumn("type");
-  uint32_t level_ = query1.getColumn("level");
-  uint32_t level = level_ & 0xff;
-  uint32_t lscale = (level_ >> 24) & 0xff;
-  uint32_t rscale = (level_ >> 16) & 0xff;
-  int32_t attack = query1.getColumn("atk");
-  int32_t defense = query1.getColumn("def");
-  uint32_t link_marker = 0;
-  if (type & TYPE_LINK) {
-    defense = 0;
-    link_marker = defense;
-  }
-  uint32_t race = query1.getColumn("race");
-  uint32_t attribute = query1.getColumn("attribute");
-
-  SQLite::Statement query2(*db, "SELECT * FROM texts WHERE id=?");
-  query2.bind(1, code);
-  query2.executeStep();
-
-  std::string name = query2.getColumn(1);
-  std::string desc = query2.getColumn(2);
-  std::vector<std::string> strings;
-  for (int i = 3; i < query2.getColumnCount(); ++i) {
-    std::string str = query2.getColumn(i);
-    if (str.empty()) {
-      break;
-    }
-    strings.push_back(str);
-  }
-  return Card(code, alias, setcode, type, level, lscale, rscale, attack,
-              defense, race, attribute, link_marker, name, desc, strings);
-}
-
-static std::unordered_map<uint32_t, Card> cards;
-static std::shared_timed_mutex cards_mtx;
-
-inline const Card &get_card_from_db(uint32_t code) {
-  // if not found, read from db and cache it
-  std::shared_lock<std::shared_timed_mutex> lock(cards_mtx);
-  auto it = cards.find(code);
-  if (it == cards.end()) {
-    lock.unlock();
-    std::unique_lock<std::shared_timed_mutex> ulock(cards_mtx);
-    cards[code] = query_card_from_db(code);
-    return cards.at(code);
-  } else {
-    return it->second;
-  }
-}
 
 inline std::vector<uint32> read_deck(const std::string &fp) {
   std::ifstream file(fp);
@@ -759,6 +701,8 @@ using YGOProEnvSpec = EnvSpec<YGOProEnvFns>;
 
 class YGOProEnv : public Env<YGOProEnvSpec> {
 protected:
+  SQLite::Database *db_;
+  std::unordered_map<uint32_t, Card> cards_;
   std::vector<uint32> deck1_;
   std::vector<uint32> deck2_;
   int player_;
@@ -812,18 +756,29 @@ public:
         deck2_(read_deck(spec.config["deck2"_])),
         player_(spec.config["player"_]), play_(spec.config["play"_]),
         verbose_(spec.config["verbose"_]) {
-    SQLite::Database *old_db = db;
-    db = new SQLite::Database(spec.config["db_path"_], SQLite::OPEN_READONLY);
-    set_card_reader(card_reader_callback);
-    set_script_reader(script_reader_callback);
-    if (old_db != nullptr) {
-      delete old_db;
+    std::unique_lock<std::shared_timed_mutex> ulock(lib_db_mtx);
+    if (lib_db == nullptr) {
+      lib_db = new SQLite::Database(spec.config["db_path"_], SQLite::OPEN_READONLY);
+      set_card_reader(card_reader_callback);
+      set_script_reader(script_reader_callback);
     }
+    ulock.unlock();
+
+    db_ = new SQLite::Database(spec.config["db_path"_], SQLite::OPEN_READONLY);
     if (verbose_) {
       std::cout << "Loaded " << deck1_.size() << " cards in deck 1"
                 << std::endl;
       std::cout << "Loaded " << deck2_.size() << " cards in deck 2"
                 << std::endl;
+    }
+  }
+
+  ~YGOProEnv() {
+    delete db_;
+    for (int i = 0; i < 2; i++) {
+      if (players_[i] != nullptr) {
+        delete players_[i];
+      }
     }
   }
 
@@ -874,7 +829,6 @@ public:
 
   void Step(const Action &action) override {
     int act = action["action"_];
-
     callback_(act);
     if (verbose_) {
       show_decision(act);
@@ -898,6 +852,61 @@ private:
     state["obs:global_"_][3] = 0;
     state["info:num_options"_] = static_cast<int>(options_.size());
     state["reward"_] = reward;
+  }
+
+  inline Card query_card_from_db(uint32_t code) {
+    SQLite::Statement query1(*db_, "SELECT * FROM datas WHERE id=?");
+    query1.bind(1, code);
+    bool found = query1.executeStep();
+    if (!found) {
+      std::string msg = "Card not found: " + std::to_string(code);
+      throw std::runtime_error(msg);
+    }
+
+    uint32_t alias = query1.getColumn("alias");
+    uint64_t setcode = query1.getColumn("setcode").getInt64();
+    uint32_t type = query1.getColumn("type");
+    uint32_t level_ = query1.getColumn("level");
+    uint32_t level = level_ & 0xff;
+    uint32_t lscale = (level_ >> 24) & 0xff;
+    uint32_t rscale = (level_ >> 16) & 0xff;
+    int32_t attack = query1.getColumn("atk");
+    int32_t defense = query1.getColumn("def");
+    uint32_t link_marker = 0;
+    if (type & TYPE_LINK) {
+      defense = 0;
+      link_marker = defense;
+    }
+    uint32_t race = query1.getColumn("race");
+    uint32_t attribute = query1.getColumn("attribute");
+
+    SQLite::Statement query2(*db_, "SELECT * FROM texts WHERE id=?");
+    query2.bind(1, code);
+    query2.executeStep();
+
+    std::string name = query2.getColumn(1);
+    std::string desc = query2.getColumn(2);
+    std::vector<std::string> strings;
+    for (int i = 3; i < query2.getColumnCount(); ++i) {
+      std::string str = query2.getColumn(i);
+      if (str.empty()) {
+        break;
+      }
+      strings.push_back(str);
+    }
+    return Card(code, alias, setcode, type, level, lscale, rscale, attack,
+                defense, race, attribute, link_marker, name, desc, strings);
+  }
+
+  inline const Card &get_card_from_db(uint32_t code) {
+    // if not found, read from db and cache it
+    auto it = cards_.find(code);
+    if (it == cards_.end()) {
+      cards_[code] = query_card_from_db(code);
+      return cards_.at(code);
+    } else {
+      return it->second;
+    }
   }
 
   void show_decision(int act) {
