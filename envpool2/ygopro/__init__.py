@@ -18,6 +18,7 @@ from envpool2.python.api import py_env
 from .ygopro_envpool import (
   _YGOProEnvPool,
   _YGOProEnvSpec,
+  init_module,
 )
 
 (

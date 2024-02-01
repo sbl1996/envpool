@@ -18,12 +18,12 @@
 #define ENVPOOL_YGOPRO_YGOPRO_H_
 
 #include <algorithm>
+#include <cctype>
+#include <climits>
 #include <cstdint>
 #include <cstdio>
-#include <fstream>
 #include <functional>
 #include <iostream>
-#include <limits>
 #include <optional>
 #include <random>
 #include <shared_mutex>
@@ -32,6 +32,7 @@
 #include <utility>
 #include <vector>
 
+#include "envpool2/core/array.h"
 #include "envpool2/core/async_envpool.h"
 #include "envpool2/core/env.h"
 
@@ -43,355 +44,15 @@
 #include <SQLiteCpp/SQLiteCpp.h>
 #include <SQLiteCpp/VariadicBind.h>
 
+#include "envpool2/ygopro/common.h"
+
 namespace ygopro {
-
-inline std::vector<std::vector<int>> combinations(int n, int r) {
-  std::vector<std::vector<int>> combs;
-  std::vector<bool> m(n);
-  std::fill(m.begin(), m.begin() + r, true);
-
-  do {
-    std::vector<int> cs;
-    cs.reserve(r);
-    for (int i = 0; i < n; ++i) {
-      if (m[i]) {
-        cs.push_back(i);
-      }
-    }
-    combs.push_back(cs);
-  } while (std::prev_permutation(m.begin(), m.end()));
-
-  return combs;
-}
-
-inline bool sum_to(const std::vector<int> &w, const std::vector<int> ind, int i, int r) {
-  std::vector<int> sums;
-  if (r <= 0) {
-    return false;
-  }
-  int n = ind.size();
-  if (i == n - 1) {
-    return r == 1 || (w[ind[i]] == r); 
-  }
-  return sum_to(w, ind, i + 1, r - 1) || sum_to(w, ind, i + 1, r - w[ind[i]]);
-}
-
-inline bool sum_to(const std::vector<int> &w, const std::vector<int> ind, int r) {
-  return sum_to(w, ind, 0, r);
-}
-
-inline auto combinations_with_weight(const std::vector<int> &weights, int r) {
-  int n = weights.size();
-  std::vector<std::vector<int>> results;
-
-  for (int k = 1; k <= n; k++) {
-    std::vector<std::vector<int>> combs = combinations(n, k);
-    for (const auto &comb : combs) {
-      if (sum_to(weights, comb, r)) {
-        results.push_back(comb);
-      }
-    }
-  }
-  return results;
-}
-
-inline std::string reason_to_string(uint8_t reason) {
-  // !victory 0x0 Surrendered
-  // !victory 0x1 LP reached 0
-  // !victory 0x2 Cards can't be drawn
-  // !victory 0x3 Time limit up
-  // !victory 0x4 Lost connection  
-  switch (reason) {
-  case 0x0:
-    return "Surrendered";
-  case 0x1:
-    return "LP reached 0";
-  case 0x2:
-    return "Cards can't be drawn";
-  case 0x3:
-    return "Time limit up";
-  case 0x4:
-    return "Lost connection";
-  default:
-    return "Unknown";
-  }
-}
-
-inline std::string phase_to_string(int phase) {
-  switch (phase) {
-  case PHASE_DRAW:
-    return "draw phase";
-  case PHASE_STANDBY:
-    return "standby phase";
-  case PHASE_MAIN1:
-    return "main1 phase";
-  case PHASE_BATTLE_START:
-    return "battle start phase";
-  case PHASE_BATTLE_STEP:
-    return "battle step phase";
-  case PHASE_DAMAGE:
-    return "damage phase";
-  case PHASE_DAMAGE_CAL:
-    return "damage calculation phase";
-  case PHASE_BATTLE:
-    return "battle phase";
-  case PHASE_MAIN2:
-    return "main2 phase";
-  case PHASE_END:
-    return "end phase";
-  default:
-    return "Unknown";
-  }
-}
-
-inline std::string position_to_string(int position, int location) {
-  switch (position) {
-  case POS_FACEUP_ATTACK:
-    return "face-up attack";
-  case POS_FACEDOWN_ATTACK:
-    return "face-down attack";
-  case POS_FACEUP_DEFENSE:
-    if (location & LOCATION_EXTRA) {
-      return "face-up";
-    }
-    return "face-up defense";
-  case POS_FACEUP:
-    return "face-up";
-  case POS_FACEDOWN_DEFENSE:
-    if (location & LOCATION_EXTRA) {
-      return "face-down";
-    }
-    return "face-down defense";
-  case POS_FACEDOWN:
-    return "face-down";
-  default:
-    return "Unknown";
-  }
-}
-
-inline std::string msg_to_string(int msg) {
-    switch (msg) {
-        case MSG_RETRY:
-            return "retry";
-        case MSG_HINT:
-            return "hint";
-        case MSG_WIN:
-            return "win";
-        case MSG_SELECT_BATTLECMD:
-            return "select_battlecmd";
-        case MSG_SELECT_IDLECMD:
-            return "select_idlecmd";
-        case MSG_SELECT_EFFECTYN:
-            return "select_effectyn";
-        case MSG_SELECT_YESNO:
-            return "select_yesno";
-        case MSG_SELECT_OPTION:
-            return "select_option";
-        case MSG_SELECT_CARD:
-            return "select_card";
-        case MSG_SELECT_CHAIN:
-            return "select_chain";
-        case MSG_SELECT_PLACE:
-            return "select_place";
-        case MSG_SELECT_POSITION:
-            return "select_position";
-        case MSG_SELECT_TRIBUTE:
-            return "select_tribute";
-        case MSG_SELECT_COUNTER:
-            return "select_counter";
-        case MSG_SELECT_SUM:
-            return "select_sum";
-        case MSG_SELECT_DISFIELD:
-            return "select_disfield";
-        case MSG_SORT_CARD:
-            return "sort_card";
-        case MSG_SELECT_UNSELECT_CARD:
-            return "select_unselect_card";
-        case MSG_CONFIRM_DECKTOP:
-            return "confirm_decktop";
-        case MSG_CONFIRM_CARDS:
-            return "confirm_cards";
-        case MSG_SHUFFLE_DECK:
-            return "shuffle_deck";
-        case MSG_SHUFFLE_HAND:
-            return "shuffle_hand";
-        case MSG_SWAP_GRAVE_DECK:
-            return "swap_grave_deck";
-        case MSG_SHUFFLE_SET_CARD:
-            return "shuffle_set_card";
-        case MSG_REVERSE_DECK:
-            return "reverse_deck";
-        case MSG_DECK_TOP:
-            return "deck_top";
-        case MSG_SHUFFLE_EXTRA:
-            return "shuffle_extra";
-        case MSG_NEW_TURN:
-            return "new_turn";
-        case MSG_NEW_PHASE:
-            return "new_phase";
-        case MSG_CONFIRM_EXTRATOP:
-            return "confirm_extratop";
-        case MSG_MOVE:
-            return "move";
-        case MSG_POS_CHANGE:
-            return "pos_change";
-        case MSG_SET:
-            return "set";
-        case MSG_SWAP:
-            return "swap";
-        case MSG_FIELD_DISABLED:
-            return "field_disabled";
-        case MSG_SUMMONING:
-            return "summoning";
-        case MSG_SUMMONED:
-            return "summoned";
-        case MSG_SPSUMMONING:
-            return "spsummoning";
-        case MSG_SPSUMMONED:
-            return "spsummoned";
-        case MSG_FLIPSUMMONING:
-            return "flipsummoning";
-        case MSG_FLIPSUMMONED:
-            return "flipsummoned";
-        case MSG_CHAINING:
-            return "chaining";
-        case MSG_CHAINED:
-            return "chained";
-        case MSG_CHAIN_SOLVING:
-            return "chain_solving";
-        case MSG_CHAIN_SOLVED:
-            return "chain_solved";
-        case MSG_CHAIN_END:
-            return "chain_end";
-        case MSG_CHAIN_NEGATED:
-            return "chain_negated";
-        case MSG_CHAIN_DISABLED:
-            return "chain_disabled";
-        case MSG_RANDOM_SELECTED:
-            return "random_selected";
-        case MSG_BECOME_TARGET:
-            return "become_target";
-        case MSG_DRAW:
-            return "draw";
-        case MSG_DAMAGE:
-            return "damage";
-        case MSG_RECOVER:
-            return "recover";
-        case MSG_EQUIP:
-            return "equip";
-        case MSG_LPUPDATE:
-            return "lpupdate";
-        case MSG_CARD_TARGET:
-            return "card_target";
-        case MSG_CANCEL_TARGET:
-            return "cancel_target";
-        case MSG_PAY_LPCOST:
-            return "pay_lpcost";
-        case MSG_ADD_COUNTER:
-            return "add_counter";
-        case MSG_REMOVE_COUNTER:
-            return "remove_counter";
-        case MSG_ATTACK:
-            return "attack";
-        case MSG_BATTLE:
-            return "battle";
-        case MSG_ATTACK_DISABLED:
-            return "attack_disabled";
-        case MSG_DAMAGE_STEP_START:
-            return "damage_step_start";
-        case MSG_DAMAGE_STEP_END:
-            return "damage_step_end";
-        case MSG_MISSED_EFFECT:
-            return "missed_effect";
-        case MSG_TOSS_COIN:
-            return "toss_coin";
-        case MSG_TOSS_DICE:
-            return "toss_dice";
-        case MSG_ROCK_PAPER_SCISSORS:
-            return "rock_paper_scissors";
-        case MSG_HAND_RES:
-            return "hand_res";
-        case MSG_ANNOUNCE_RACE:
-            return "announce_race";
-        case MSG_ANNOUNCE_ATTRIB:
-            return "announce_attrib";
-        case MSG_ANNOUNCE_CARD:
-            return "announce_card";
-        case MSG_ANNOUNCE_NUMBER:
-            return "announce_number";
-        case MSG_CARD_HINT:
-            return "card_hint";
-        case MSG_TAG_SWAP:
-            return "tag_swap";
-        case MSG_RELOAD_FIELD:
-            return "reload_field";
-        case MSG_AI_NAME:
-            return "ai_name";
-        case MSG_SHOW_HINT:
-            return "show_hint";
-        case MSG_PLAYER_HINT:
-            return "player_hint";
-        case MSG_MATCH_KILL:
-            return "match_kill";
-        case MSG_CUSTOM_MSG:
-            return "custom_msg";
-        default:
-            return "unknown_msg";
-    }
-}
 
 using PlayerId = uint8_t;
 
-static SQLite::Database *lib_db = nullptr;
-static std::shared_timed_mutex lib_db_mtx;
-
+// TODO: 7% performance loss
 static std::shared_timed_mutex duel_mtx;
 
-inline uint32 card_reader_callback(uint32 code, card_data *card) {
-  std::shared_lock<std::shared_timed_mutex> lock(lib_db_mtx);
-  SQLite::Statement query(*lib_db, "SELECT * FROM datas WHERE id=?");
-  query.bind(1, code);
-  query.executeStep();
-  card->code = code;
-  card->alias = query.getColumn("alias");
-  card->setcode = query.getColumn("setcode").getInt64();
-  card->type = query.getColumn("type");
-  uint32_t level_ = query.getColumn("level");
-  card->level = level_ & 0xff;
-  card->lscale = (level_ >> 24) & 0xff;
-  card->rscale = (level_ >> 16) & 0xff;
-  card->attack = query.getColumn("atk");
-  card->defense = query.getColumn("def");
-  if (card->type & TYPE_LINK) {
-    card->link_marker = card->defense;
-    card->defense = 0;
-  } else {
-    card->link_marker = 0;
-  }
-  card->race = query.getColumn("race");
-  card->attribute = query.getColumn("attribute");
-  return 0;
-}
-
-inline byte *script_reader_callback(const char *name, int *lenptr) {
-  std::ifstream file(name, std::ios::binary);
-  if (!file) {
-    return nullptr;
-  }
-  file.seekg(0, std::ios::end);
-  int len = file.tellg();
-  file.seekg(0, std::ios::beg);
-  byte *buf = new byte[len];
-  file.read((char *)buf, len);
-  *lenptr = len;
-  return buf;
-}
-
-inline std::string ltrim(std::string s) {
-    s.erase(s.begin(), std::find_if(s.begin(), s.end(),
-            std::not1(std::ptr_fun<int, int>(std::isspace))));
-    return s;
-}
 class Card {
   friend class YGOProEnv;
 
@@ -445,12 +106,26 @@ public:
 
   const std::string &name() const { return name_; }
   const std::string &desc() const { return desc_; }
+  const uint32_t &type() const { return type_; }
+  const uint32_t &level() const { return level_; }
   const std::vector<std::string> &strings() const { return strings_; }
 
-  std::string get_spec(bool opponent) const;
-  std::string get_spec(PlayerId player) const;
-  uint32_t get_spec_code(PlayerId player) const;
-  std::string get_position() const;
+  std::string get_spec(bool opponent) const {
+    return ls_to_spec(location_, sequence_, opponent);
+  }
+
+  std::string get_spec(PlayerId player) const {
+    return get_spec(player != controler_);
+  }
+
+  uint32_t get_spec_code(PlayerId player) const {
+    return ls_to_spec_code(location_, sequence_, player != controler_);
+  }
+
+  std::string get_position() const {
+    return position_to_string(position_, location_);
+  }
+
   std::string get_effect_description(uint32_t desc, bool existing = false) const {
     std::string s;
     bool e = false;
@@ -486,145 +161,200 @@ public:
 };
 
 
-inline std::vector<uint32> read_deck(const std::string &fp) {
-  std::ifstream file(fp);
-  std::string line;
-  std::vector<uint32> deck;
+inline Card db_query_card(const SQLite::Database &db, uint32_t code) {
+  SQLite::Statement query1(db, "SELECT * FROM datas WHERE id=?");
+  query1.bind(1, code);
+  bool found = query1.executeStep();
+  if (!found) {
+    std::string msg = "Card not found: " + std::to_string(code);
+    throw std::runtime_error(msg);
+  }
 
-  if (file.is_open()) {
-    while (std::getline(file, line)) {
-      if (line.find("side") != std::string::npos) {
-        break;
-      }
-      // Check if line contains only digits
-      if (std::all_of(line.begin(), line.end(), ::isdigit)) {
-        deck.push_back(std::stoul(line));
-      }
+  uint32_t alias = query1.getColumn("alias");
+  uint64_t setcode = query1.getColumn("setcode").getInt64();
+  uint32_t type = query1.getColumn("type");
+  uint32_t level_ = query1.getColumn("level");
+  uint32_t level = level_ & 0xff;
+  uint32_t lscale = (level_ >> 24) & 0xff;
+  uint32_t rscale = (level_ >> 16) & 0xff;
+  int32_t attack = query1.getColumn("atk");
+  int32_t defense = query1.getColumn("def");
+  uint32_t link_marker = 0;
+  if (type & TYPE_LINK) {
+    defense = 0;
+    link_marker = defense;
+  }
+  uint32_t race = query1.getColumn("race");
+  uint32_t attribute = query1.getColumn("attribute");
+
+  SQLite::Statement query2(db, "SELECT * FROM texts WHERE id=?");
+  query2.bind(1, code);
+  query2.executeStep();
+
+  std::string name = query2.getColumn(1);
+  std::string desc = query2.getColumn(2);
+  std::vector<std::string> strings;
+  for (int i = 3; i < query2.getColumnCount(); ++i) {
+    std::string str = query2.getColumn(i);
+    if (str.empty()) {
+      break;
     }
-    file.close();
-  } else {
-    printf("Unable to open deck file\n");
+    strings.push_back(str);
   }
-
-  return deck;
+  return Card(code, alias, setcode, type, level, lscale, rscale, attack,
+              defense, race, attribute, link_marker, name, desc, strings);
 }
 
-inline std::vector<std::string> flag_to_usable_cardspecs(uint32_t flag,
-                                                         bool reverse = false) {
-  std::string zone_names[4] = {"m", "s", "om", "os"};
-  std::vector<std::string> specs;
-  for (int j = 0; j < 4; j++) {
-    uint32_t value = (flag >> (j * 8)) & 0xff;
-    for (int i = 0; i < 8; i++) {
-      bool avail = (value & (1 << i)) == 0;
-      if (reverse) {
-        avail = !avail;
-      }
-      if (avail) {
-        specs.push_back(zone_names[j] + std::to_string(i + 1));
-      }
+
+inline card_data db_query_card_data(const SQLite::Database &db, uint32_t code) {
+  SQLite::Statement query(db, "SELECT * FROM datas WHERE id=?");
+  query.bind(1, code);
+  query.executeStep();
+  card_data card;
+  card.code = code;
+  card.alias = query.getColumn("alias");
+  card.setcode = query.getColumn("setcode").getInt64();
+  card.type = query.getColumn("type");
+  uint32_t level_ = query.getColumn("level");
+  card.level = level_ & 0xff;
+  card.lscale = (level_ >> 24) & 0xff;
+  card.rscale = (level_ >> 16) & 0xff;
+  card.attack = query.getColumn("atk");
+  card.defense = query.getColumn("def");
+  if (card.type & TYPE_LINK) {
+    card.link_marker = card.defense;
+    card.defense = 0;
+  } else {
+    card.link_marker = 0;
+  }
+  card.race = query.getColumn("race");
+  card.attribute = query.getColumn("attribute");
+  return card;
+}
+
+// TODO: use faster map (martinus/unordered_dense)
+static std::unordered_map<uint32_t, Card> cards_;
+static std::unordered_map<uint32_t, uint32_t> card_ids_;
+static std::unordered_map<uint32_t, card_data> cards_data_;
+static std::unordered_map<std::string, std::vector<uint32_t>> main_decks_;
+static std::unordered_map<std::string, std::vector<uint32_t>> extra_decks_;
+
+inline const Card &c_get_card(uint32_t code) {
+  return cards_.at(code);
+}
+
+inline uint32_t &c_get_card_id(uint32_t code) {
+  return card_ids_.at(code);
+}
+
+inline void sort_extra_deck(std::vector<uint32_t> &deck) {
+  std::vector<uint32_t> c;
+  std::vector<std::pair<uint32_t, int>> fusion, xyz, synchro, link;
+
+  for (auto code : deck) {
+    const Card &cc = c_get_card(code);
+    if (cc.type() & TYPE_FUSION) {
+      fusion.push_back({code, cc.level()});
+    } else if (cc.type() & TYPE_XYZ) {
+      xyz.push_back({code, cc.level()});
+    } else if (cc.type() & TYPE_SYNCHRO) {
+      synchro.push_back({code, cc.level()});
+    } else if (cc.type() & TYPE_LINK) {
+      link.push_back({code, cc.level()});
+    } else {
+      throw std::runtime_error("Not extra deck card");
     }
   }
-  return specs;
-}
 
-inline std::string ls_to_spec(uint8_t loc, uint8_t seq) {
-  std::string spec;
-  if (loc == LOCATION_HAND) {
-    spec += "h";
-  } else if (loc == LOCATION_MZONE) {
-    spec += "m";
-  } else if (loc == LOCATION_SZONE) {
-    spec += "s";
-  } else if (loc == LOCATION_GRAVE) {
-    spec += "g";
-  } else if (loc == LOCATION_REMOVED) {
-    spec += "r";
-  } else if (loc == LOCATION_EXTRA) {
-    spec += "x";
+  auto cmp = [](const std::pair<uint32_t, int> &a,
+                const std::pair<uint32_t, int> &b) {
+    return a.second < b.second;
+  };
+  std::sort(fusion.begin(), fusion.end(), cmp);
+  std::sort(xyz.begin(), xyz.end(), cmp);
+  std::sort(synchro.begin(), synchro.end(), cmp);
+  std::sort(link.begin(), link.end(), cmp);
+
+  for (const auto &tc : fusion) {
+    c.push_back(tc.first);
   }
-  spec += std::to_string(seq + 1);
-  return spec;
-}
-
-inline std::string ls_to_spec(uint8_t loc, uint8_t seq, bool opponent) {
-  std::string spec = ls_to_spec(loc, seq);
-  if (opponent) {
-    spec.insert(0, 1, 'o');
+  for (const auto &tc : xyz) {
+    c.push_back(tc.first);
   }
-  return spec;
-}
-
-inline std::tuple<uint8_t, uint8_t> sepc_to_ls(const std::string spec) {
-  uint8_t loc;
-  uint8_t seq;
-  if (spec[0] == 'h') {
-    loc = LOCATION_HAND;
-  } else if (spec[0] == 'm') {
-    loc = LOCATION_MZONE;
-  } else if (spec[0] == 's') {
-    loc = LOCATION_SZONE;
-  } else if (spec[0] == 'g') {
-    loc = LOCATION_GRAVE;
-  } else if (spec[0] == 'r') {
-    loc = LOCATION_REMOVED;
-  } else if (spec[0] == 'x') {
-    loc = LOCATION_EXTRA;
-  } else {
-    throw std::runtime_error("Invalid location");
+  for (const auto &tc : synchro) {
+    c.push_back(tc.first);
   }
-  seq = std::stoi(spec.substr(1)) - 1;
-  return {loc, seq};
+  for (const auto &tc : link) {
+    c.push_back(tc.first);
+  }
+
+  deck = c;
 }
 
-inline uint32_t ls_to_spec_code(uint8_t loc, uint8_t seq, bool opponent) {
-  uint32_t c = opponent ? 1 : 0;
-  c |= (loc << 8);
-  c |= (seq << 16);
-  return c;
+inline void preload_deck(const SQLite::Database &db, const std::vector<uint32_t> &deck) {
+  for (const auto &code : deck) {
+    auto it = cards_.find(code);
+    if (it == cards_.end()) {
+      cards_[code] = db_query_card(db, code);
+      card_ids_[code] = cards_.size();
+    }
+
+    auto it2 = cards_data_.find(code);
+    if (it2 == cards_data_.end()) {
+      cards_data_[code] = db_query_card_data(db, code);
+    }
+  }
 }
 
-inline std::string code_to_spec(uint32_t spec_code) {
-  uint8_t loc = (spec_code >> 8) & 0xff;
-  uint8_t seq = (spec_code >> 16) & 0xff;
-  bool opponent = (spec_code & 0xff) == 1;
-  return ls_to_spec(loc, seq, opponent);
+inline uint32 card_reader_callback(uint32 code, card_data *card) {
+  const card_data &c = cards_data_.at(code);
+  *card = c;
+  return 0;
 }
 
-inline std::string Card::get_spec(bool opponent) const {
-  return ls_to_spec(location_, sequence_, opponent);
-};
+static void init_module(
+  const std::string &db_path, const std::unordered_map<std::string, std::string> &decks) {
+  SQLite::Database db(db_path, SQLite::OPEN_READONLY);
 
-inline std::string Card::get_spec(PlayerId player) const {
-  return get_spec(player != controler_);
-};
+  for (const auto &[name, deck] : decks) {
+    std::vector<uint32_t> main_deck = read_main_deck(deck);
+    std::vector<uint32_t> extra_deck = read_extra_deck(deck);
+    main_decks_[name] = main_deck;
+    extra_decks_[name] = extra_deck;
 
-inline uint32_t Card::get_spec_code(PlayerId player) const {
-  return ls_to_spec_code(location_, sequence_, player != controler_);
-};
+    preload_deck(db, main_deck);
+    preload_deck(db, extra_deck);
+  }
 
-inline std::string Card::get_position() const {
-  return position_to_string(position_, location_);
+  for (auto &[name, deck] : extra_decks_) {
+    sort_extra_deck(deck);
+  }
+
+  set_card_reader(card_reader_callback);
+  set_script_reader(script_reader_callback);
+
 }
+
 
 class YGOProEnvFns {
 public:
   static decltype(auto) DefaultConfig() {
-    return MakeDict("db_path"_.Bind(std::string("vendor/locale/en/cards.db")),
-                    "deck1"_.Bind(std::string("vendor/decks/OldSchool.ydk")),
-                    "deck2"_.Bind(std::string("vendor/decks/OldSchool.ydk")),
-                    "player"_.Bind(-1), "play"_.Bind(false),
-                    "verbose"_.Bind(false));
+    return MakeDict("deck1"_.Bind(std::string("OldSchool")),
+                    "deck2"_.Bind(std::string("OldSchool")),
+                    "player"_.Bind(-1), "play_mode"_.Bind(std::string("bot")),
+                    "verbose"_.Bind(false), "max_options"_.Bind(16));
   }
   template <typename Config>
   static decltype(auto) StateSpec(const Config &conf) {
-    float fmax = std::numeric_limits<float>::max();
-    return MakeDict("obs:global_"_.Bind(Spec<float>({4})),
-                    "info:num_options"_.Bind(Spec<int>({}, {0, 100})));
+    return MakeDict(
+      "obs:cards_"_.Bind(Spec<uint8_t>({110, 37})),
+      "obs:global_"_.Bind(Spec<uint8_t>({7})),
+      "obs:actions_"_.Bind(Spec<uint8_t>({conf["max_options"_], 7})),
+      "info:num_options"_.Bind(Spec<int>({}, {0, conf["max_options"_]})));
   }
   template <typename Config>
   static decltype(auto) ActionSpec(const Config &conf) {
-    return MakeDict("action"_.Bind(Spec<int>({}, {0, 100})));
+    return MakeDict("action"_.Bind(Spec<int>({}, {0, conf["max_options"_] - 1})));
   }
 };
 
@@ -701,12 +431,13 @@ using YGOProEnvSpec = EnvSpec<YGOProEnvFns>;
 
 class YGOProEnv : public Env<YGOProEnvSpec> {
 protected:
-  SQLite::Database *db_;
-  std::unordered_map<uint32_t, Card> cards_;
-  std::vector<uint32> deck1_;
-  std::vector<uint32> deck2_;
+  std::vector<uint32> main_deck1_;
+  std::vector<uint32> main_deck2_;
+  std::vector<uint32> extra_deck1_;
+  std::vector<uint32> extra_deck2_;
+
   int player_;
-  bool play_ = false;
+  const std::string play_mode_;
   bool verbose_ = false;
 
   int max_episode_steps_, elapsed_step_;
@@ -747,34 +478,29 @@ protected:
   // chain
   PlayerId chaining_player_;
 
+  // feature
+  int max_options_;
+
 public:
   YGOProEnv(const Spec &spec, int env_id)
       : Env<YGOProEnvSpec>(spec, env_id),
         max_episode_steps_(spec.config["max_episode_steps"_]),
         elapsed_step_(max_episode_steps_ + 1), dist_int_(0, 0xffffffff),
-        deck1_(read_deck(spec.config["deck1"_])),
-        deck2_(read_deck(spec.config["deck2"_])),
-        player_(spec.config["player"_]), play_(spec.config["play"_]),
-        verbose_(spec.config["verbose"_]) {
-    std::unique_lock<std::shared_timed_mutex> ulock(lib_db_mtx);
-    if (lib_db == nullptr) {
-      lib_db = new SQLite::Database(spec.config["db_path"_], SQLite::OPEN_READONLY);
-      set_card_reader(card_reader_callback);
-      set_script_reader(script_reader_callback);
-    }
-    ulock.unlock();
-
-    db_ = new SQLite::Database(spec.config["db_path"_], SQLite::OPEN_READONLY);
+        main_deck1_(main_decks_.at(spec.config["deck1"_])),
+        main_deck2_(main_decks_.at(spec.config["deck2"_])),
+        extra_deck1_(extra_decks_.at(spec.config["deck1"_])),
+        extra_deck2_(extra_decks_.at(spec.config["deck2"_])),
+        player_(spec.config["player"_]), play_mode_(spec.config["play_mode"_]),
+        verbose_(spec.config["verbose"_]), max_options_(spec.config["max_options"_]) {
     if (verbose_) {
-      std::cout << "Loaded " << deck1_.size() << " cards in deck 1"
-                << std::endl;
-      std::cout << "Loaded " << deck2_.size() << " cards in deck 2"
-                << std::endl;
+      std::cout << "Loaded " << main_deck1_.size() << " cards in main deck 1 and "
+                << extra_deck1_.size() << " cards in extra deck 1" << std::endl;
+      std::cout << "Loaded " << main_deck1_.size() << " cards in main deck 1 and "
+                << extra_deck1_.size() << " cards in extra deck 1" << std::endl;
     }
   }
 
   ~YGOProEnv() {
-    delete db_;
     for (int i = 0; i < 2; i++) {
       if (players_[i] != nullptr) {
         delete players_[i];
@@ -797,19 +523,19 @@ public:
     pduel_ = create_duel(duel_seed);
     ulock.unlock();
 
-    for (int i = 0; i < 2; i++) {
+    for (PlayerId i = 0; i < 2; i++) {
       if (players_[i] != nullptr) {
         delete players_[i];
       }
       std::string nickname = i == 0 ? "Alice" : "Bob";
       int init_lp = 8000;
-      if (i != ai_player_ && play_) {
+      if ((i != ai_player_) && (play_mode_ == "human")) {
         players_[i] = new HumanPlayer(nickname, init_lp, i, verbose_);
       } else {
         players_[i] = new GreedyAI(nickname, init_lp, i, verbose_);
       }
       set_player_info(pduel_, i, init_lp, 5, 1);
-      load_deck(i == 0 ? deck1_ : deck2_, i);
+      load_deck(i);
       lp_[i] = players_[i]->init_lp_;
     }
 
@@ -848,69 +574,192 @@ public:
   }
 
 private:
+
+  void _set_obs_cards(
+    TArray<uint8_t> &feat, std::unordered_map<std::string, int>& spec2index, PlayerId player, bool opponent) {
+    const auto &shape = feat.Shape();
+    auto n1 = shape[0];
+    auto n2 = shape[1];
+    int offset = opponent ? n1 / 2 : 0;
+    std::vector<std::pair<uint8_t, bool>> configs = {
+      {LOCATION_DECK, true},
+      {LOCATION_HAND, true},
+      {LOCATION_MZONE, false},
+      {LOCATION_SZONE, false},
+      {LOCATION_GRAVE, false},
+      {LOCATION_REMOVED, false},
+      {LOCATION_EXTRA, true},
+    };
+    for (const auto &[location, hidden_for_opponent] : configs) {
+      if (opponent && hidden_for_opponent) {
+        auto n_cards = query_field_count(pduel_, player, location);
+        for (auto i = 0; i < n_cards; i++) {
+          // feat(offset, 0) = 0;
+          feat(offset, 1) = location2id.at(location);
+          // feat(offset, 2) = 0;
+          feat(offset, 3) = 1;
+          // for (int j = 4; j < n2; ++j) {
+          //   feat(offset, j) = 0;
+          // }
+          offset++;
+        }
+      } else {
+        std::vector<Card> cards = get_cards_in_location(player, location);
+        for (int i = 0; i < cards.size(); ++i) {
+          const auto &c = cards[i];
+          feat(offset, 0) = c_get_card_id(c.code_);
+          feat(offset, 1) = location2id.at(location);
+          feat(offset, 2) = c.sequence_ + 1;
+          feat(offset, 3) = opponent ? 1 : 0;
+          feat(offset, 4) = position2id.at(c.position_);
+          feat(offset, 5) = attribute2id.at(c.attribute_);
+          feat(offset, 6) = race2id.at(c.race_);
+          feat(offset, 7) = c.level_;
+
+          auto [atk1, atk2] = float_transform(c.attack_);
+          feat(offset, 8) = atk1;
+          feat(offset, 9) = atk2;
+
+          auto [def1, def2] = float_transform(c.defense_);
+          feat(offset, 10) = def1;
+          feat(offset, 11) = def2;
+
+          auto type_ids = type_to_ids(c.type_);
+          for (int j = 0; j < type_ids.size(); ++j) {
+            feat(offset, 12 + j) = type_ids[j];
+          }
+
+          offset++;
+
+          spec2index[c.get_spec(opponent)] = offset;
+        }
+      }
+    }
+  }
+
+  void _set_obs_global(TArray<uint8_t> &feat, PlayerId player) {
+    uint8_t me = player;
+    uint8_t op = 1 - player;
+    
+    auto [me_lp_1, me_lp_2] = float_transform(lp_[me]);
+    feat(0) = me_lp_1;
+    feat(1) = me_lp_2;
+
+    auto [op_lp_1, op_lp_2] = float_transform(lp_[op]);
+    feat(2) = op_lp_1;
+    feat(3) = op_lp_2;
+
+    feat(4) = phase2id.at(current_phase_);
+    feat(5) = (me == 0) ? 1 : 0;
+    feat(6) = (me == tp_) ? 1 : 0;
+  }
+
+  void _set_obs_action_(
+    TArray<uint8_t> &feat, int i, int msg, const std::unordered_map<std::string, int> &spec2index,
+    std::optional<std::string> spec = {}, char act = CHAR_MAX,
+    char yesno = CHAR_MAX, char phase = CHAR_MAX,
+    bool cancel = false, uint8_t position = 0) {
+    if (spec) {
+      feat(i, 0) = spec2index.at(*spec);
+    }
+
+    feat(i, 1) = msg2id.at(msg);
+
+    if (act != CHAR_MAX) {
+      feat(i, 2) = cmd_act2id.at(act);
+    }
+
+    if (yesno != CHAR_MAX) {
+      feat(i, 3) = cmd_yesno2id.at(yesno);
+    }
+
+    if (phase != CHAR_MAX) {
+      feat(i, 4) = cmd_phase2id.at(phase);
+    }
+
+    if (cancel) {
+      feat(i, 5) = 1;
+    }
+
+    feat(i, 6) = position;
+  }
+
+  void _set_obs_action(
+    TArray<uint8_t> &feat, int i, int msg, const std::unordered_map<std::string, int> &spec2index, const std::string &option) {
+    if (msg == MSG_SELECT_IDLECMD) {
+      // _set_obs_action_(feat, i, msg, spec2index, {}, CHAR_MAX, CHAR_MAX, CHAR_MAX, false, 0);
+      if (option == "b" || option == "e") {
+        _set_obs_action_(feat, i, msg, spec2index, {}, CHAR_MAX, CHAR_MAX, option[0], false, 0);
+      } else {
+        auto act = option[0];
+        auto spec = option.substr(2);
+        _set_obs_action_(feat, i, msg, spec2index, spec, act, CHAR_MAX, CHAR_MAX, false, 0);
+      }
+    } else if (msg == MSG_SELECT_CHAIN) {
+      if (option == "c") {
+        _set_obs_action_(feat, i, msg, spec2index, {}, CHAR_MAX, CHAR_MAX, CHAR_MAX, true, 0);
+      } else {
+        _set_obs_action_(feat, i, msg, spec2index, option, CHAR_MAX, CHAR_MAX, CHAR_MAX, false, 0);
+      }
+    } else if (msg == MSG_SELECT_CARD || msg == MSG_SELECT_TRIBUTE) {
+      // TODO: Multi-select
+      auto idx = option.find_first_of(" ");
+      if (idx == std::string::npos) {
+        _set_obs_action_(feat, i, msg, spec2index, option, CHAR_MAX, CHAR_MAX, CHAR_MAX, false, 0);
+      } else {
+        _set_obs_action_(feat, i, msg, spec2index, option.substr(idx + 1), CHAR_MAX, CHAR_MAX, CHAR_MAX, false, 0);
+      }
+    } else if (msg == MSG_SELECT_POSITION) {
+      _set_obs_action_(feat, i, msg, spec2index, {}, CHAR_MAX, CHAR_MAX, CHAR_MAX, false, std::stoi(option));
+    } else if (msg == MSG_SELECT_EFFECTYN || msg == MSG_SELECT_YESNO) {
+      _set_obs_action_(feat, i, msg, spec2index, {}, CHAR_MAX, option[0], CHAR_MAX, false, 0);      
+    } else if (msg == MSG_SELECT_BATTLECMD) {
+      if (option == "m" || option == "e") {
+        _set_obs_action_(feat, i, msg, spec2index, {}, CHAR_MAX, CHAR_MAX, option[0], false, 0);
+      } else {
+        auto act = option[0];
+        auto spec = option.substr(2);
+        _set_obs_action_(feat, i, msg, spec2index, spec, act, CHAR_MAX, CHAR_MAX, false, 0);
+      }
+    } else {
+      throw std::runtime_error("Unsupported message " + std::to_string(msg));
+    }
+  }
+
+  void _set_obs_actions(
+    TArray<uint8_t> &feat, const std::unordered_map<std::string, int> &spec2index, int msg, const std::vector<std::string> &options) {
+    int n = options.size();
+    if (options.size() > max_options_) {
+      printf("%s [", msg_to_string(msg).c_str());
+      for (int i = 0; i < options.size(); ++i) {
+        printf(" '%s'", options[i].c_str());
+        if (i < options.size() - 1) {
+          printf(",");
+        }
+      }
+      printf(" ]\n");
+    }
+    auto start = std::max(n - max_options_, 0);
+    for (int i = start; i < n; ++i) {
+      _set_obs_action(feat, i - start, msg, spec2index, options[i]);
+    }
+  }
+
   void WriteState(float reward) {
     State state = Allocate();
-    state["obs:global_"_][0] = static_cast<float>(lp_[to_decide_]);
-    state["obs:global_"_][1] = static_cast<float>(lp_[1 - to_decide_]);
-    state["obs:global_"_][2] = 0;
-    state["obs:global_"_][3] = 0;
-    state["info:num_options"_] = static_cast<int>(options_.size());
+
+    auto n_options = options_.size();
+    state["info:num_options"_] = int(n_options);
     state["reward"_] = reward;
-  }
 
-  inline Card query_card_from_db(uint32_t code) {
-    SQLite::Statement query1(*db_, "SELECT * FROM datas WHERE id=?");
-    query1.bind(1, code);
-    bool found = query1.executeStep();
-    if (!found) {
-      std::string msg = "Card not found: " + std::to_string(code);
-      throw std::runtime_error(msg);
+    if (n_options == 0) {
+      return;
     }
-
-    uint32_t alias = query1.getColumn("alias");
-    uint64_t setcode = query1.getColumn("setcode").getInt64();
-    uint32_t type = query1.getColumn("type");
-    uint32_t level_ = query1.getColumn("level");
-    uint32_t level = level_ & 0xff;
-    uint32_t lscale = (level_ >> 24) & 0xff;
-    uint32_t rscale = (level_ >> 16) & 0xff;
-    int32_t attack = query1.getColumn("atk");
-    int32_t defense = query1.getColumn("def");
-    uint32_t link_marker = 0;
-    if (type & TYPE_LINK) {
-      defense = 0;
-      link_marker = defense;
-    }
-    uint32_t race = query1.getColumn("race");
-    uint32_t attribute = query1.getColumn("attribute");
-
-    SQLite::Statement query2(*db_, "SELECT * FROM texts WHERE id=?");
-    query2.bind(1, code);
-    query2.executeStep();
-
-    std::string name = query2.getColumn(1);
-    std::string desc = query2.getColumn(2);
-    std::vector<std::string> strings;
-    for (int i = 3; i < query2.getColumnCount(); ++i) {
-      std::string str = query2.getColumn(i);
-      if (str.empty()) {
-        break;
-      }
-      strings.push_back(str);
-    }
-    return Card(code, alias, setcode, type, level, lscale, rscale, attack,
-                defense, race, attribute, link_marker, name, desc, strings);
-  }
-
-  inline const Card &get_card_from_db(uint32_t code) {
-    // if not found, read from db and cache it
-    auto it = cards_.find(code);
-    if (it == cards_.end()) {
-      cards_[code] = query_card_from_db(code);
-      return cards_.at(code);
-    } else {
-      return it->second;
-    }
+    std::unordered_map<std::string, int> spec2index;
+    _set_obs_cards(state["obs:cards_"_], spec2index, ai_player_, false);
+    _set_obs_cards(state["obs:cards_"_], spec2index, 1 - ai_player_, true);
+    _set_obs_global(state["obs:global_"_], ai_player_);
+    _set_obs_actions(state["obs:actions_"_], spec2index, msg_, options_);
   }
 
   void show_decision(int act) {
@@ -925,55 +774,23 @@ private:
     printf(" ]\n");
   }
 
-  void load_deck(std::vector<uint32_t> deck, PlayerId player,
-                 bool shuffle = true) {
-    std::vector<uint32_t> c;
-    std::vector<std::pair<uint32_t, int>> fusion, xyz, synchro, link;
-
-    for (auto code : deck) {
-      const Card &cc = get_card_from_db(code);
-      if (cc.type_ & TYPE_FUSION) {
-        fusion.push_back({code, cc.level_});
-      } else if (cc.type_ & TYPE_XYZ) {
-        xyz.push_back({code, cc.level_});
-      } else if (cc.type_ & TYPE_SYNCHRO) {
-        synchro.push_back({code, cc.level_});
-      } else if (cc.type_ & TYPE_LINK) {
-        link.push_back({code, cc.level_});
-      } else {
-        c.push_back(code);
-      }
-    }
+  void load_deck(PlayerId player, bool shuffle = true) {
+    std::vector<uint32_t> &main_deck = player == 0 ? main_deck1_ : main_deck2_;
+    std::vector<uint32_t> &extra_deck = player == 0 ? extra_deck1_ : extra_deck2_;
 
     if (shuffle) {
-      std::shuffle(c.begin(), c.end(), gen_);
+      std::shuffle(main_deck.begin(), main_deck.end(), gen_);
     }
 
-    auto cmp = [](const std::pair<uint32_t, int> &a,
-                  const std::pair<uint32_t, int> &b) {
-      return a.second < b.second;
-    };
-    std::sort(fusion.begin(), fusion.end(), cmp);
-    std::sort(xyz.begin(), xyz.end(), cmp);
-    std::sort(synchro.begin(), synchro.end(), cmp);
-    std::sort(link.begin(), link.end(), cmp);
-
-    for (const auto &tc : fusion) {
-      c.push_back(tc.first);
-    }
-    for (const auto &tc : xyz) {
-      c.push_back(tc.first);
-    }
-    for (const auto &tc : synchro) {
-      c.push_back(tc.first);
-    }
-    for (const auto &tc : link) {
-      c.push_back(tc.first);
+    // add main deck in reverse order following ygopro
+    // but since we have shuffled deck, so just add in order
+    for (int i = 0; i < main_deck.size(); i++) {
+      new_card(pduel_, main_deck[i], player, player, LOCATION_DECK, 0, POS_FACEDOWN_DEFENSE);
     }
 
-    for (auto code : c) {
-      new_card(pduel_, code, player, player, LOCATION_DECK, 0,
-               POS_FACEDOWN_DEFENSE);
+    // add extra deck in reverse order following ygopro
+    for (int i = extra_deck.size() - 1; i >= 0; --i) {
+      new_card(pduel_, extra_deck[i], player, player, LOCATION_EXTRA, 0, POS_FACEDOWN_DEFENSE);
     }
   }
 
@@ -1063,7 +880,7 @@ private:
     }
     f = q_read_u32();
     uint32_t code = q_read_u32();
-    Card c = get_card_from_db(code);
+    Card c = c_get_card(code);
     uint32_t position = q_read_u32();
     c.set_location(position);
     uint32_t level = q_read_u32();
@@ -1087,6 +904,69 @@ private:
       c.defense_ = link_marker;
     }
     return c;
+  }
+
+  std::vector<Card> get_cards_in_location(
+    PlayerId player, uint8_t loc) {
+    int32_t flags = QUERY_CODE | QUERY_POSITION | QUERY_LEVEL | QUERY_RANK | QUERY_ATTACK | QUERY_DEFENSE | QUERY_EQUIP_CARD | QUERY_OVERLAY_CARD | QUERY_COUNTERS | QUERY_LSCALE | QUERY_RSCALE | QUERY_LINK;
+    int32_t bl = query_field_card(pduel_, player, loc, flags, query_buf_, 0);
+    qdp_ = 0;
+    std::vector<Card> cards;
+    while (true) {
+      if (qdp_ >= bl) {
+        break;
+      }
+      uint32_t f = q_read_u32();
+      if (f == LEN_EMPTY) {
+        continue;;
+      }
+      f = q_read_u32();
+      uint32_t code = q_read_u32();
+      Card c = c_get_card(code);
+      uint32_t position = q_read_u32();
+      c.set_location(position);
+      uint32_t level = q_read_u32();
+      if ((level & 0xff) > 0) {
+        c.level_ = level & 0xff;
+      }
+      uint32_t rank = q_read_u32();
+      if ((rank & 0xff) > 0) {
+        c.level_ = rank & 0xff;
+      }
+      c.attack_ = q_read_u32();
+      c.defense_ = q_read_u32();
+
+      // TODO: equip_target
+      if (f & QUERY_EQUIP_CARD) {
+        q_read_u32();
+      }
+
+      // TODO: xyz
+      uint32_t n_xyz = q_read_u32();
+      for (int i = 0; i < n_xyz; ++i) {
+        q_read_u32();
+      }
+
+      // TODO: counters
+      uint32_t n_counters = q_read_u32();
+      for (int i = 0; i < n_counters; ++i) {
+        q_read_u32();
+      }
+
+      c.lscale_ = q_read_u32();
+      c.rscale_ = q_read_u32();
+
+      uint32_t link = q_read_u32();
+      uint32_t link_marker = q_read_u32();
+      if ((link & 0xff) > 0) {
+        c.level_ = link & 0xff;
+      }
+      if (link_marker > 0) {
+        c.defense_ = link_marker;
+      }
+      cards.push_back(c);
+    }
+    return cards;
   }
 
   std::vector<Card> read_cardlist(bool extra = false, bool extra8 = false) {
@@ -1155,7 +1035,7 @@ private:
       const auto &pl = players_[player];
       pl->notify("Drew " + std::to_string(drawed) + " cards:");
       for (int i = 0; i < drawed; ++i) {
-        const auto &c = get_card_from_db(codes[i]);
+        const auto &c = c_get_card(codes[i]);
         pl->notify(std::to_string(i + 1) + ": " + c.name_);
       }
       const auto &op = players_[1 - player];
@@ -1186,9 +1066,9 @@ private:
       uint32_t location = read_u32();
       uint32_t newloc = read_u32();
       uint32_t reason = read_u32();
-      Card card = get_card_from_db(code);
+      Card card = c_get_card(code);
       card.set_location(location);
-      Card cnew = get_card_from_db(code);
+      Card cnew = c_get_card(code);
       cnew.set_location(newloc);
       auto pl = players_[card.controler_];
       auto op = players_[1 - card.controler_];
@@ -1276,7 +1156,7 @@ private:
       }
       uint32_t code = read_u32();
       uint32_t location = read_u32();
-      Card card = get_card_from_db(code);
+      Card card = c_get_card(code);
       card.set_location(location);
       auto c = card.controler_;
       auto cpl = players_[c];
@@ -1300,7 +1180,7 @@ private:
         if (value > 2000) {
           uint32_t code = value;
           players_[player]->notify(players_[player]->nickname() + " select " +
-                                   get_card_from_db(code).name_);
+                                   c_get_card(code).name_);
         } else {
           players_[player]->notify("TODO: system string " +
                                    std::to_string(value));
@@ -1343,7 +1223,7 @@ private:
         return;
       }
       uint32_t code = read_u32();
-      Card card = get_card_from_db(code);
+      Card card = c_get_card(code);
       card.set_location(read_u32());
       uint8_t prevpos = card.position_;
       card.position_ = read_u8();
@@ -1366,7 +1246,7 @@ private:
         return;
       }
       uint32_t code = read_u32();
-      Card card = get_card_from_db(code);
+      Card card = c_get_card(code);
       card.set_location(read_u32());
       const auto &nickname = players_[card.controler_]->nickname();
       for (auto pl : players_) {
@@ -1383,7 +1263,7 @@ private:
         return;
       }
       uint32_t code = read_u32();
-      Card card = get_card_from_db(code);
+      Card card = c_get_card(code);
       card.set_location(read_u32());
       const auto &nickname = players_[card.controler_]->nickname();
       for (auto pl : players_) {
@@ -1412,7 +1292,7 @@ private:
         return;
       }
       uint32_t code = read_u32();
-      Card card = get_card_from_db(code);
+      Card card = c_get_card(code);
       card.set_location(read_u32());
       auto tc = read_u8();
       auto tl = read_u8();
@@ -1585,14 +1465,14 @@ private:
       for (const auto [code, spec, data] : activatable) {
         options_.push_back("v " + spec);
         if (verbose_) {
-          const auto &c = get_card_from_db(code);
+          const auto &c = c_get_card(code);
           pl->notify("v " + spec + ": activate " + c.name_ + " (" + std::to_string(c.attack_) + "/" + std::to_string(c.defense_) + ")");
         }
       }
       for (const auto [code, spec, data] : attackable) {
         options_.push_back("a " + spec);
         if (verbose_) {
-          const auto &c = get_card_from_db(code);
+          const auto &c = c_get_card(code);
           if (c.type_ & TYPE_LINK) {
             pl->notify("a " + spec + ": " + c.name_ + " (" + std::to_string(c.attack_) + ") attack");
           } else {
@@ -1644,7 +1524,7 @@ private:
         for (int i = 0; i < size; ++i) {
           auto code = read_u32();
           auto loc = read_u32();
-          Card card = get_card_from_db(code);
+          Card card = c_get_card(code);
           card.set_location(loc);
           cards.push_back(card);
         }
@@ -1786,7 +1666,7 @@ private:
         uint32_t code = read_u32();
         if (verbose_) {
           uint32_t loc = read_u32();
-          Card card = get_card_from_db(code);
+          Card card = c_get_card(code);
           card.set_location(loc);          
           cards.push_back(card);
           spec_codes.push_back(card.get_spec_code(player));
@@ -1887,7 +1767,7 @@ private:
         std::string opt;
         if (desc > 10000) {
           auto code = desc >> 4;
-          auto card = get_card_from_db(code);
+          auto card = c_get_card(code);
           opt = card.strings_[desc & 0xf];
           if (opt.empty()) {
             opt = "Unknown question from " + card.name_ + ". Yes or no?";
@@ -1918,7 +1798,7 @@ private:
       if (verbose_) {
         uint32_t code = read_u32();
         uint32_t loc = read_u32();
-        Card card = get_card_from_db(code);
+        Card card = c_get_card(code);
         card.set_location(loc);
         auto desc = read_u32();
         auto pl = players_[player];
@@ -1972,7 +1852,7 @@ private:
         std::string option = "s " + spec;
         options_.push_back(option);
         if (verbose_) {
-          const auto &name = get_card_from_db(code).name_;
+          const auto &name = c_get_card(code).name_;
           pl->notify(option + ": Summon " + name +
                      " in face-up attack position.");
         }
@@ -1982,7 +1862,7 @@ private:
         std::string option = "t " + spec;
         options_.push_back(option);
         if (verbose_) {
-          const auto &name = get_card_from_db(code).name_;
+          const auto &name = c_get_card(code).name_;
           pl->notify(option + ": Set " + name + ".");
         }
       }
@@ -1991,7 +1871,7 @@ private:
         std::string option = "m " + spec;
         options_.push_back(option);
         if (verbose_) {
-          const auto &name = get_card_from_db(code).name_;
+          const auto &name = c_get_card(code).name_;
           pl->notify(option + ": Summon " + name +
                      " in face-down defense position.");
         }
@@ -2001,7 +1881,7 @@ private:
         std::string option = "r " + spec;
         options_.push_back(option);
         if (verbose_) {
-          const auto &name = get_card_from_db(code).name_;
+          const auto &name = c_get_card(code).name_;
           pl->notify(option + ": Reposition " + name + ".");
         }
       }
@@ -2010,25 +1890,25 @@ private:
         std::string option = "c " + spec;
         options_.push_back(option);
         if (verbose_) {
-          const auto &name = get_card_from_db(code).name_;
+          const auto &name = c_get_card(code).name_;
           pl->notify(option + ": Special summon " + name + ".");
         }
       }
-      std::map<std::string, int> idle_activate_count;
+      std::unordered_map<std::string, int> idle_activate_count;
       for (const auto &[code, spec, data] : idle_activate_) {
         idle_activate_count[spec] += 1;
       }
       for (const auto &[code, spec, data] : idle_activate_) {
         int count = idle_activate_count[spec];
         if (count > 1) {
-          Card card = get_card_from_db(code);
+          Card card = c_get_card(code);
           printf("%s has %d effects\n", card.name_.c_str(), count);
           throw std::runtime_error("Activate more than one effect.");
         }
         std::string option = "v " + spec;
         options_.push_back(option);
         if (verbose_) {
-          pl->notify(option + ": " + get_card_from_db(code).get_effect_description(data));
+          pl->notify(option + ": " + c_get_card(code).get_effect_description(data));
         }
       }
 
