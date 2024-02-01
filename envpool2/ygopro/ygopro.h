@@ -737,7 +737,7 @@ protected:
   int dl_ = 0;
   uint32_t res_;
 
-  byte query_buf_[128];
+  byte query_buf_[4096];
   int qdp_ = 0;
 
   byte resp_buf_[128];
@@ -792,7 +792,11 @@ public:
     }
 
     unsigned long duel_seed = dist_int_(gen_);
+
+    std::unique_lock<std::shared_timed_mutex> ulock(duel_mtx);
     pduel_ = create_duel(duel_seed);
+    ulock.unlock();
+
     for (int i = 0; i < 2; i++) {
       if (players_[i] != nullptr) {
         delete players_[i];
@@ -2179,7 +2183,10 @@ private:
     winner_ = player;
     win_reason_ = reason;
 
+    std::unique_lock<std::shared_timed_mutex> ulock(duel_mtx);
     end_duel(pduel_);
+    ulock.unlock();
+
     duel_started_ = false;
   }
 
