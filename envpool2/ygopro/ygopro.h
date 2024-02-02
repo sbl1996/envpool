@@ -348,7 +348,7 @@ public:
   static decltype(auto) StateSpec(const Config &conf) {
     return MakeDict(
       "obs:cards_"_.Bind(Spec<uint8_t>({110, 37})),
-      "obs:global_"_.Bind(Spec<uint8_t>({7})),
+      "obs:global_"_.Bind(Spec<uint8_t>({8})),
       "obs:actions_"_.Bind(Spec<uint8_t>({conf["max_options"_], 7})),
       "info:num_options"_.Bind(Spec<int>({}, {0, conf["max_options"_]})));
   }
@@ -749,12 +749,15 @@ private:
     State state = Allocate();
 
     auto n_options = options_.size();
-    state["info:num_options"_] = int(n_options);
     state["reward"_] = reward;
 
     if (n_options == 0) {
+      state["info:num_options"_] = 1;
+      state["obs:global_"_][7] = uint8_t(1);
       return;
     }
+
+    state["info:num_options"_] = int(n_options);
     std::unordered_map<std::string, int> spec2index;
     _set_obs_cards(state["obs:cards_"_], spec2index, ai_player_, false);
     _set_obs_cards(state["obs:cards_"_], spec2index, 1 - ai_player_, true);
