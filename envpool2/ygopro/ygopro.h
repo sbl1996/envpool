@@ -296,7 +296,9 @@ inline void preload_deck(const SQLite::Database &db, const std::vector<uint32_t>
     auto it = cards_.find(code);
     if (it == cards_.end()) {
       cards_[code] = db_query_card(db, code);
-      card_ids_[code] = cards_.size();
+      if (card_ids_.find(code) == card_ids_.end()) {
+        throw std::runtime_error("Card not found in code list: " + std::to_string(code));
+      }
     }
 
     auto it2 = cards_data_.find(code);
@@ -313,7 +315,17 @@ inline uint32 card_reader_callback(uint32 code, card_data *card) {
 }
 
 static void init_module(
-  const std::string &db_path, const std::unordered_map<std::string, std::string> &decks) {
+  const std::string &db_path, const std::string &code_list_file, const std::unordered_map<std::string, std::string> &decks) {
+  // parse code from code_list_file
+  std::ifstream file(code_list_file);
+  std::string line;
+  int i = 0;
+  while (std::getline(file, line)) {
+    i++;
+    uint32_t code = std::stoul(line);
+    card_ids_[code] = i;
+  }
+
   SQLite::Database db(db_path, SQLite::OPEN_READONLY);
 
   for (const auto &[name, deck] : decks) {
@@ -342,15 +354,15 @@ public:
     return MakeDict("deck1"_.Bind(std::string("OldSchool")),
                     "deck2"_.Bind(std::string("OldSchool")),
                     "player"_.Bind(-1), "play_mode"_.Bind(std::string("bot")),
-                    "verbose"_.Bind(false), "max_options"_.Bind(16));
+                    "verbose"_.Bind(false), "max_options"_.Bind(16), "max_cards"_.Bind(55));
   }
   template <typename Config>
   static decltype(auto) StateSpec(const Config &conf) {
     return MakeDict(
-      "obs:cards_"_.Bind(Spec<uint8_t>({110, 37})),
+      "obs:cards_"_.Bind(Spec<uint8_t>({conf["max_cards"_] * 2, 37})),
       "obs:global_"_.Bind(Spec<uint8_t>({8})),
       "obs:actions_"_.Bind(Spec<uint8_t>({conf["max_options"_], 7})),
-      "info:num_options"_.Bind(Spec<int>({}, {0, conf["max_options"_]})));
+      "info:num_options"_.Bind(Spec<int>({}, {0, conf["max_options"_] - 1})));
   }
   template <typename Config>
   static decltype(auto) ActionSpec(const Config &conf) {
@@ -480,6 +492,7 @@ protected:
 
   // feature
   int max_options_;
+  int max_cards_;
 
 public:
   YGOProEnv(const Spec &spec, int env_id)
@@ -491,7 +504,8 @@ public:
         extra_deck1_(extra_decks_.at(spec.config["deck1"_])),
         extra_deck2_(extra_decks_.at(spec.config["deck2"_])),
         player_(spec.config["player"_]), play_mode_(spec.config["play_mode"_]),
-        verbose_(spec.config["verbose"_]), max_options_(spec.config["max_options"_]) {
+        verbose_(spec.config["verbose"_]), max_options_(spec.config["max_options"_]),
+        max_cards_(spec.config["max_cards"_]) {
     if (verbose_) {
       std::cout << "Loaded " << main_deck1_.size() << " cards in main deck 1 and "
                 << extra_deck1_.size() << " cards in extra deck 1" << std::endl;
@@ -722,7 +736,11 @@ private:
         _set_obs_action_(feat, i, msg, spec2index, spec, act, CHAR_MAX, CHAR_MAX, false, 0);
       }
     } else {
-      throw std::runtime_error("Unsupported message " + std::to_string(msg));
+      if (verbose_) {
+        printf("Unsupported message %s\n", msg_to_string(msg).c_str());
+      } else {
+        throw std::runtime_error("Unsupported message " + std::to_string(msg));
+      }
     }
   }
 
@@ -738,17 +756,27 @@ private:
         }
       }
       printf(" ]\n");
+
+      // generate random permutation
+      std::vector<int> perm(n);
+      std::iota(perm.begin(), perm.end(), 0);
+      std::shuffle(perm.begin(), perm.end(), gen_);
+      
+      for (int i = 0; i < max_options_; ++i) {
+        _set_obs_action(feat, i, msg, spec2index, options[perm[i]]);
+      }
     }
-    auto start = std::max(n - max_options_, 0);
-    for (int i = start; i < n; ++i) {
-      _set_obs_action(feat, i - start, msg, spec2index, options[i]);
+    else {
+      for (int i = 0; i < n; ++i) {
+        _set_obs_action(feat, i, msg, spec2index, options[i]);
+      }
     }
   }
 
   void WriteState(float reward) {
     State state = Allocate();
 
-    auto n_options = options_.size();
+    int n_options = options_.size();
     state["reward"_] = reward;
 
     if (n_options == 0) {
@@ -757,7 +785,7 @@ private:
       return;
     }
 
-    state["info:num_options"_] = int(n_options);
+    state["info:num_options"_] = int(std::min(n_options, 16));
     std::unordered_map<std::string, int> spec2index;
     _set_obs_cards(state["obs:cards_"_], spec2index, ai_player_, false);
     _set_obs_cards(state["obs:cards_"_], spec2index, 1 - ai_player_, true);
