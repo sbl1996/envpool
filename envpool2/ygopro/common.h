@@ -309,7 +309,7 @@ inline std::string ls_to_spec(uint8_t loc, uint8_t seq, bool opponent) {
   return spec;
 }
 
-inline std::tuple<uint8_t, uint8_t> sepc_to_ls(const std::string spec) {
+inline std::tuple<uint8_t, uint8_t> spec_to_ls(const std::string spec) {
   uint8_t loc;
   uint8_t seq;
   int offset = 1;
@@ -349,7 +349,7 @@ inline uint32_t spec_to_code(const std::string &spec) {
     opponent = true;
     offset++;
   }
-  auto [loc, seq] = sepc_to_ls(spec.substr(offset));
+  auto [loc, seq] = spec_to_ls(spec.substr(offset));
   return ls_to_spec_code(loc, seq, opponent);
 }
 
@@ -594,6 +594,9 @@ static const std::vector<int> _msgs = {
   MSG_SELECT_EFFECTYN,
   MSG_SELECT_YESNO,
   MSG_SELECT_BATTLECMD,
+  MSG_SELECT_UNSELECT_CARD,
+  MSG_SELECT_OPTION,
+  MSG_SELECT_PLACE,
 };
 
 static const std::unordered_map<int, uint8_t> msg2id = make_ids(_msgs, 1);
@@ -616,7 +619,7 @@ inline std::string phase_to_string(int phase) {
   return "unknown";
 }
 
-inline std::string position_to_string(int position, int location) {
+inline std::string position_to_string(int position) {
   auto it = position2str.find(position);
   if (it != position2str.end()) {
     return it->second;

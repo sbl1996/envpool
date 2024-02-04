@@ -7,9 +7,6 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -march=native")
 set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -march=native")
 
-# set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -include ${CMAKE_CURRENT_SOURCE_DIR}/third_party/force_link_glibc_2.17.h")
-# set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -include ${CMAKE_CURRENT_SOURCE_DIR}/third_party/force_link_glibc_2.17.h")
-
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 include("${PROJECT_SOURCE_DIR}/cmake/Helper.cmake")
