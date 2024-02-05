@@ -112,7 +112,7 @@ public:
   const std::vector<std::string> &strings() const { return strings_; }
 
   std::string get_spec(bool opponent) const {
-    return ls_to_spec(location_, sequence_, opponent);
+    return ls_to_spec(location_, sequence_, position_, opponent);
   }
 
   std::string get_spec(PlayerId player) const {
@@ -120,7 +120,7 @@ public:
   }
 
   uint32_t get_spec_code(PlayerId player) const {
-    return ls_to_spec_code(location_, sequence_, player != controler_);
+    return ls_to_spec_code(location_, sequence_, position_, player != controler_);
   }
 
   std::string get_position() const { return position_to_string(position_); }
@@ -301,8 +301,11 @@ inline void preload_deck(const SQLite::Database &db,
 }
 
 inline uint32 card_reader_callback(uint32 code, card_data *card) {
-  const card_data &c = cards_data_.at(code);
-  *card = c;
+  auto it = cards_data_.find(code);
+  if (it == cards_data_.end()) {
+    throw std::runtime_error("Card not found: " + std::to_string(code));
+  }
+  *card = it->second;
   return 0;
 }
 
@@ -455,6 +458,8 @@ protected:
   std::uniform_int_distribution<uint64_t> dist_int_;
   bool done_{true};
   bool duel_started_{false};
+  bool keep_processing_{false};
+  uint32_t eng_flag_{0};
 
   PlayerId winner_;
   uint8_t win_reason_;
@@ -473,7 +478,6 @@ protected:
   byte data_[4096];
   int dp_ = 0;
   int dl_ = 0;
-  uint32_t res_;
 
   byte query_buf_[4096];
   int qdp_ = 0;
@@ -579,7 +583,7 @@ public:
     winner_ = 255;
     win_reason_ = 255;
 
-    next(true);
+    next();
 
     done_ = false;
     elapsed_step_ = 0;
@@ -611,7 +615,7 @@ public:
       show_decision(idx);
     }
 
-    next(false);
+    next();
     float reward = 0;
     if (done_) {
       reward = winner_ == ai_player_ ? 1.0 : -1.0;
@@ -654,26 +658,40 @@ private:
         std::vector<Card> cards = get_cards_in_location(player, location);
         for (int i = 0; i < cards.size(); ++i) {
           const auto &c = cards[i];
-          feat(offset, 0) = c_get_card_id(c.code_);
+          bool hide = opponent && (c.position_ & POS_FACEDOWN);
+          bool overlay = c.location_ & LOCATION_OVERLAY;
+          if (overlay) {
+            hide = false;
+          }
+
+          if (!hide) {
+            feat(offset, 0) = c_get_card_id(c.code_);
+          }
           feat(offset, 1) = location2id.at(location);
           feat(offset, 2) = c.sequence_ + 1;
           feat(offset, 3) = opponent ? 1 : 0;
-          feat(offset, 4) = position2id.at(c.position_);
-          feat(offset, 5) = attribute2id.at(c.attribute_);
-          feat(offset, 6) = race2id.at(c.race_);
-          feat(offset, 7) = c.level_;
+          if (overlay) {
+            feat(offset, 4) = position2id.at(POS_FACEUP);
+            feat(offset, 5) = 1;
+          } else {
+            feat(offset, 4) = position2id.at(c.position_);
+          }
+          if (!hide) {
+            feat(offset, 6) = attribute2id.at(c.attribute_);
+            feat(offset, 7) = race2id.at(c.race_);
+            feat(offset, 8) = c.level_;
+            auto [atk1, atk2] = float_transform(c.attack_);
+            feat(offset, 9) = atk1;
+            feat(offset, 10) = atk2;
 
-          auto [atk1, atk2] = float_transform(c.attack_);
-          feat(offset, 8) = atk1;
-          feat(offset, 9) = atk2;
+            auto [def1, def2] = float_transform(c.defense_);
+            feat(offset, 11) = def1;
+            feat(offset, 12) = def2;
 
-          auto [def1, def2] = float_transform(c.defense_);
-          feat(offset, 10) = def1;
-          feat(offset, 11) = def2;
-
-          auto type_ids = type_to_ids(c.type_);
-          for (int j = 0; j < type_ids.size(); ++j) {
-            feat(offset, 12 + j) = type_ids[j];
+            auto type_ids = type_to_ids(c.type_);
+            for (int j = 0; j < type_ids.size(); ++j) {
+              feat(offset, 13 + j) = type_ids[j];
+            }
           }
 
           offset++;
@@ -794,7 +812,7 @@ private:
       player = 1 - ai_player_;
       offset++;
     }
-    auto [loc, seq] = spec_to_ls(spec.substr(offset));
+    auto [loc, seq, pos] = spec_to_ls(spec.substr(offset));
     return card_ids_.at(get_card_code(player, loc, seq));
   }
 
@@ -830,7 +848,7 @@ private:
                         const std::unordered_map<std::string, int> &spec2index,
                         int msg, const std::vector<std::string> &options) {
     for (int i = 0; i < options.size(); ++i) {
-        _set_obs_action(feat, i, msg, options[i], spec2index);
+      _set_obs_action(feat, i, msg, options[i], spec2index);
     }
   }
 
@@ -855,6 +873,12 @@ private:
     if (n_options > max_options_) {
       options_.resize(max_options_);
     }
+
+    // print spec2index
+    // for (auto const& [key, val] : spec2index) {
+    //   printf("%s %d\n", key.c_str(), val);
+    // }
+
 
     n_options = options_.size();
     state["info:num_options"_] = n_options;
@@ -911,16 +935,20 @@ private:
     }
   }
 
-  void next(bool process_first = true) {
-    bool skip_process = !process_first;
+  void next() {
     while (duel_started_) {
-      if (!skip_process) {
-        res_ = process(pduel_);
-        dl_ = get_message(pduel_, data_);
-        dp_ = 0;
-      } else {
-        skip_process = false;
+      if (eng_flag_ == PROCESSOR_END) {
+        break;
       }
+      uint32_t res = process(pduel_);
+      dl_ = res & PROCESSOR_BUFFER_LEN;
+      eng_flag_ = res & PROCESSOR_FLAG;
+
+      if (dl_ == 0) {
+        continue;
+      }
+      get_message(pduel_, data_);
+      dp_ = 0;
       while (dp_ != dl_) {
         handle_message();
         if (options_.empty()) {
@@ -951,9 +979,6 @@ private:
           }
         }
       }
-      if (res_ & 0x20000) {
-        break;
-      }
     }
     done_ = true;
     options_.clear();
@@ -970,6 +995,12 @@ private:
   uint32 read_u32() {
     uint32 v = *reinterpret_cast<uint32_t*>(data_ + dp_);
     dp_ += 4;
+    return v;
+  }
+
+  uint32 q_read_u8() {
+    uint8_t v = *reinterpret_cast<uint8_t*>(query_buf_ + qdp_);
+    qdp_ += 1;
     return v;
   }
 
@@ -1053,8 +1084,16 @@ private:
       f = q_read_u32();
       uint32_t code = q_read_u32();
       Card c = c_get_card(code);
-      uint32_t position = q_read_u32();
-      c.set_location(position);
+
+      uint8_t controller = q_read_u8();
+      uint8_t location = q_read_u8();
+      uint8_t sequence = q_read_u8();
+      uint8_t position = q_read_u8();
+      c.controler_ = controller;
+      c.location_ = location;
+      c.sequence_ = sequence;
+      c.position_ = position;
+
       uint32_t level = q_read_u32();
       if ((level & 0xff) > 0) {
         c.level_ = level & 0xff;
@@ -1074,7 +1113,13 @@ private:
       // TODO: xyz
       uint32_t n_xyz = q_read_u32();
       for (int i = 0; i < n_xyz; ++i) {
-        q_read_u32();
+        auto code = q_read_u32();
+        Card c_ = c_get_card(code);
+        c_.controler_ = controller;
+        c_.location_ = location | LOCATION_OVERLAY;
+        c_.sequence_ = sequence;
+        c_.position_ = i;
+        cards.push_back(c_);
       }
 
       // TODO: counters
@@ -1139,7 +1184,7 @@ private:
           data = read_u32();
         }
       }
-      card_specs.push_back({code, ls_to_spec(loc, seq), data});
+      card_specs.push_back({code, ls_to_spec(loc, seq, 0), data});
     }
     return card_specs;
   }
@@ -1147,6 +1192,12 @@ private:
   void handle_message() {
     msg_ = int(data_[dp_++]);
     options_ = {};
+
+    if (verbose_) {
+      printf("Message %s, length %d, dp %d\n",
+              msg_to_string(msg_).c_str(), dl_, dp_);
+    }
+
     if (msg_ == MSG_DRAW) {
       if (!verbose_) {
         dp_ = dl_;
@@ -1798,8 +1849,8 @@ private:
           auto controller = read_u8();
           auto loc = read_u8();
           auto seq = read_u8();
-          dp_++;
-          auto spec = ls_to_spec(loc, seq, controller != player);
+          auto pos = read_u8();
+          auto spec = ls_to_spec(loc, seq, pos, controller != player);
           select_specs.push_back(spec);
         }
       }
@@ -1855,7 +1906,11 @@ private:
         for (const auto &card : cards) {
           auto spec = card.get_spec(player);
           specs.push_back(spec);
-          pl->notify(spec + ": " + card.name_);
+          if (card.controler_ != player && card.position_ & POS_FACEDOWN) {
+            pl->notify(spec + ": " + card.get_position() + " card");
+          } else {
+            pl->notify(spec + ": " + card.name_);
+          }
         }
       } else {
         for (int i = 0; i < size; ++i) {
@@ -1863,8 +1918,8 @@ private:
           auto controller = read_u8();
           auto loc = read_u8();
           auto seq = read_u8();
-          dp_++;
-          auto spec = ls_to_spec(loc, seq, controller != player);
+          auto pos = read_u8();
+          auto spec = ls_to_spec(loc, seq, pos, controller != player);
           specs.push_back(spec);
         }
       }
@@ -1932,7 +1987,7 @@ private:
           auto seq = read_u8();
           auto release_param = read_u8();
 
-          auto spec = ls_to_spec(loc, seq, controller != player);
+          auto spec = ls_to_spec(loc, seq, 0, controller != player);
           specs.push_back(spec);
 
           release_params.push_back(release_param);
@@ -2001,14 +2056,14 @@ private:
           uint8_t loc = read_u8();
           uint8_t seq = read_u8();
           uint8_t pos = read_u8();
-          spec_codes.push_back(ls_to_spec_code(loc, seq, c != player));
+          spec_codes.push_back(ls_to_spec_code(loc, seq, pos, c != player));
         }
         uint32_t desc = read_u32();
         descs.push_back(desc);
       }
 
       if ((size == 0) && (spe_count == 0)) {
-        // keep_processing = true;
+        keep_processing_ = true;
 
         // non-GUI don't need this
         // if (verbose_) {
@@ -2209,8 +2264,7 @@ private:
       if (verbose_) {
         pl->notify("Select a card and action to perform.");
       }
-      for (const auto &card : summonable_) {
-        auto [code, spec, data] = card;
+      for (const auto &[code, spec, data] : summonable_) {
         std::string option = "s " + spec;
         options_.push_back(option);
         if (verbose_) {
@@ -2219,8 +2273,7 @@ private:
                      " in face-up attack position.");
         }
       }
-      for (const auto &card : idle_set_) {
-        auto [code, spec, data] = card;
+      for (const auto &[code, spec, data] : idle_set_) {
         std::string option = "t " + spec;
         options_.push_back(option);
         if (verbose_) {
@@ -2228,8 +2281,7 @@ private:
           pl->notify(option + ": Set " + name + ".");
         }
       }
-      for (const auto &card : idle_mset_) {
-        auto [code, spec, data] = card;
+      for (const auto &[code, spec, data] : idle_mset_) {
         std::string option = "m " + spec;
         options_.push_back(option);
         if (verbose_) {
@@ -2238,8 +2290,7 @@ private:
                      " in face-down defense position.");
         }
       }
-      for (const auto &card : repos_) {
-        auto [code, spec, data] = card;
+      for (const auto &[code, spec, data] : repos_) {
         std::string option = "r " + spec;
         options_.push_back(option);
         if (verbose_) {
@@ -2247,8 +2298,7 @@ private:
           pl->notify(option + ": Reposition " + name + ".");
         }
       }
-      for (const auto &card : spsummon_) {
-        auto [code, spec, data] = card;
+      for (const auto &[code, spec, data] : spsummon_) {
         std::string option = "c " + spec;
         options_.push_back(option);
         if (verbose_) {
@@ -2390,7 +2440,7 @@ private:
           plr = 1 - player;
           spec = spec.substr(1);
         }
-        auto [loc, seq] = spec_to_ls(spec);
+        auto [loc, seq, pos] = spec_to_ls(spec);
         resp_buf_[0] = plr;
         resp_buf_[1] = loc;
         resp_buf_[2] = seq;

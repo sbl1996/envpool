@@ -282,36 +282,41 @@ inline std::vector<std::string> flag_to_usable_cardspecs(uint32_t flag,
   return specs;
 }
 
-inline std::string ls_to_spec(uint8_t loc, uint8_t seq) {
+inline std::string ls_to_spec(uint8_t loc, uint8_t seq, uint8_t pos) {
   std::string spec;
-  if (loc == LOCATION_HAND) {
+  if (loc & LOCATION_HAND) {
     spec += "h";
-  } else if (loc == LOCATION_MZONE) {
+  } else if (loc & LOCATION_MZONE) {
     spec += "m";
-  } else if (loc == LOCATION_SZONE) {
+  } else if (loc & LOCATION_SZONE) {
     spec += "s";
-  } else if (loc == LOCATION_GRAVE) {
+  } else if (loc & LOCATION_GRAVE) {
     spec += "g";
-  } else if (loc == LOCATION_REMOVED) {
+  } else if (loc & LOCATION_REMOVED) {
     spec += "r";
-  } else if (loc == LOCATION_EXTRA) {
+  } else if (loc & LOCATION_EXTRA) {
     spec += "x";
   }
   spec += std::to_string(seq + 1);
+  if (loc & LOCATION_OVERLAY) {
+    spec += "#";
+    spec += std::to_string(pos + 1);
+  }
   return spec;
 }
 
-inline std::string ls_to_spec(uint8_t loc, uint8_t seq, bool opponent) {
-  std::string spec = ls_to_spec(loc, seq);
+inline std::string ls_to_spec(uint8_t loc, uint8_t seq, uint8_t pos, bool opponent) {
+  std::string spec = ls_to_spec(loc, seq, pos);
   if (opponent) {
     spec.insert(0, 1, 'o');
   }
   return spec;
 }
 
-inline std::tuple<uint8_t, uint8_t> spec_to_ls(const std::string spec) {
+inline std::tuple<uint8_t, uint8_t, uint8_t> spec_to_ls(const std::string spec) {
   uint8_t loc;
   uint8_t seq;
+  uint8_t pos = 0;
   int offset = 1;
   if (spec[0] == 'h') {
     loc = LOCATION_HAND;
@@ -331,14 +336,22 @@ inline std::tuple<uint8_t, uint8_t> spec_to_ls(const std::string spec) {
   } else {
     throw std::runtime_error("Invalid location");
   }
-  seq = std::stoi(spec.substr(offset)) - 1;
-  return {loc, seq};
+  int end = offset;
+  while (end < spec.size() && std::isdigit(spec[end])) {
+    end++;
+  }
+  seq = std::stoi(spec.substr(offset, end - offset)) - 1;
+  if (end < spec.size() && spec[end] == '#') {
+    pos = std::stoi(spec.substr(end + 1)) - 1;
+  }
+  return {loc, seq, pos};
 }
 
-inline uint32_t ls_to_spec_code(uint8_t loc, uint8_t seq, bool opponent) {
+inline uint32_t ls_to_spec_code(uint8_t loc, uint8_t seq, uint8_t pos, bool opponent) {
   uint32_t c = opponent ? 1 : 0;
   c |= (loc << 8);
   c |= (seq << 16);
+  c |= (pos << 24);
   return c;
 }
 
@@ -349,16 +362,17 @@ inline uint32_t spec_to_code(const std::string &spec) {
     opponent = true;
     offset++;
   }
-  auto [loc, seq] = spec_to_ls(spec.substr(offset));
-  return ls_to_spec_code(loc, seq, opponent);
+  auto [loc, seq, pos] = spec_to_ls(spec.substr(offset));
+  return ls_to_spec_code(loc, seq, pos, opponent);
 }
 
 
 inline std::string code_to_spec(uint32_t spec_code) {
   uint8_t loc = (spec_code >> 8) & 0xff;
   uint8_t seq = (spec_code >> 16) & 0xff;
+  uint8_t pos = (spec_code >> 24) & 0xff;
   bool opponent = (spec_code & 0xff) == 1;
-  return ls_to_spec(loc, seq, opponent);
+  return ls_to_spec(loc, seq, pos, opponent);
 }
 
 
@@ -468,8 +482,10 @@ static const std::map<uint8_t, std::string> location2str = {
 
 static const std::unordered_map<uint8_t, uint8_t> location2id = make_ids(location2str, 1);
 
+#define POS_NONE 0x0  // xyz materials (overlay)
 
 static const std::map<uint8_t, std::string> position2str = {
+  {POS_NONE, "none"},
   {POS_FACEUP_ATTACK, "face-up attack"},
   {POS_FACEDOWN_ATTACK, "face-down attack"},
   {POS_ATTACK, "attack"},
@@ -480,7 +496,7 @@ static const std::map<uint8_t, std::string> position2str = {
   {POS_DEFENSE, "defense"},
 };
 
-static const std::unordered_map<uint8_t, uint8_t> position2id = make_ids(position2str, 1);
+static const std::unordered_map<uint8_t, uint8_t> position2id = make_ids(position2str);
 
 #define ATTRIBUTE_NONE 0x0  // token
 
