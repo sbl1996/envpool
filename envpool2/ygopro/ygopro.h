@@ -489,6 +489,12 @@ protected:
   int max_options_;
   int max_cards_;
 
+  double step_time_ = 0;
+  uint64_t step_time_count_ = 0;
+
+  double reset_time_ = 0;
+  uint64_t reset_time_count_ = 0;
+
   const int n_history_actions_;
   TArray<uint8_t> history_actions_;
   int ha_p_ = 0;
@@ -530,6 +536,8 @@ public:
   bool IsDone() override { return done_; }
 
   void Reset() override {
+    // clock_t start = clock();
+
     if (player_ == -1) {
       ai_player_ = dist_int_(gen_) % 2;
     } else {
@@ -576,14 +584,25 @@ public:
     done_ = false;
     elapsed_step_ = 0;
     WriteState(0.0);
+
+    // double seconds = static_cast<double>(clock() - start) / CLOCKS_PER_SEC;
+    // // update reset_time by moving average
+    // reset_time_ = reset_time_* (static_cast<double>(reset_time_count_) / (reset_time_count_ + 1)) + seconds / (reset_time_count_ + 1);
+    // reset_time_count_++;
+    // if (reset_time_count_ % 20 == 0) {
+    //   printf("Reset time: %.3f\n", reset_time_);
+    // }
+
   }
 
-  void update_history_actions(int idx, int msg, const std::string &option, uint32_t code_id) {
+  void update_history_actions(int idx, int msg, const std::string &option, uint32_t code_id = 0) {
     _set_obs_action(history_actions_, ha_p_, msg, option, {}, code_id);
     ha_p_ = (ha_p_ + 1) % n_history_actions_;
   }
 
   void Step(const Action &action) override {
+    // clock_t start = clock();
+
     int idx = action["action"_];
     callback_(idx);
     update_history_actions(idx, msg_, options_[idx], prev_code_ids_[idx]);
@@ -599,6 +618,14 @@ public:
     }
 
     WriteState(reward);
+
+    // double seconds = static_cast<double>(clock() - start) / CLOCKS_PER_SEC;
+    // // update step_time by moving average
+    // step_time_ = step_time_* (static_cast<double>(step_time_count_) / (step_time_count_ + 1)) + seconds / (step_time_count_ + 1);
+    // step_time_count_++;
+    // if (step_time_count_ % 500 == 0) {
+    //   printf("Step time: %.3f\n", step_time_);
+    // }
   }
 
 private:
@@ -619,13 +646,8 @@ private:
       if (opponent && hidden_for_opponent) {
         auto n_cards = query_field_count(pduel_, player, location);
         for (auto i = 0; i < n_cards; i++) {
-          // feat(offset, 0) = 0;
           feat(offset, 1) = location2id.at(location);
-          // feat(offset, 2) = 0;
           feat(offset, 3) = 1;
-          // for (int j = 4; j < n2; ++j) {
-          //   feat(offset, j) = 0;
-          // }
           offset++;
         }
       } else {
@@ -716,6 +738,7 @@ private:
 
   void _set_obs_action(TArray<uint8_t> &feat, int i, int msg, const std::string &option,
                        const std::unordered_map<std::string, int> &spec2index, uint8_t code_id = 0) {
+    _set_obs_action_msg(feat, i, msg);
     if (msg == MSG_SELECT_IDLECMD) {
       if (option == "b" || option == "e") {
         _set_obs_action_phase(feat, i, option[0]);
@@ -775,8 +798,7 @@ private:
     return card_ids_.at(get_card_code(player, loc, seq));
   }
 
-  void update_prev_code_ids() {
-    const auto &option = options_[0];
+  uint8_t get_prev_code_id(const std::string &option) {
     uint8_t code_id = 0;
     if (msg_ == MSG_SELECT_IDLECMD) {
       if (!(option == "b" || option == "e")) {
@@ -801,7 +823,7 @@ private:
         code_id = spec_to_card_id(option.substr(2));
       }
     }
-    prev_code_ids_[0] = code_id;
+    return code_id;
   }
 
   void _set_obs_actions(TArray<uint8_t> &feat,
@@ -907,13 +929,13 @@ private:
         if (to_decide_ == ai_player_) {
           if (msg_ == MSG_SELECT_PLACE) {
             callback_(0);
-            // update_history_actions(0);
+            // update_history_actions(0, msg_, options_[0]);
             if (verbose_) {
               show_decision(0);
             }
           } else if (options_.size() == 1) {
             callback_(0);
-            update_prev_code_ids();
+            prev_code_ids_[0] = get_prev_code_id(options_[0]);
             update_history_actions(0, msg_, options_[0], prev_code_ids_[0]);
             if (verbose_) {
               show_decision(0);
@@ -1124,10 +1146,6 @@ private:
 
   void handle_message() {
     msg_ = int(data_[dp_++]);
-    if (verbose_) {
-      printf("Msg: %s, dp: %d, dl: %d\n", msg_to_string(msg_).c_str(), dp_,
-             dl_);
-    }
     options_ = {};
     if (msg_ == MSG_DRAW) {
       if (!verbose_) {
@@ -1332,7 +1350,6 @@ private:
       uint8_t loc = read_u8();
       uint8_t seq = read_u8();
       uint8_t pos = read_u8();
-      printf("player: %d, loc: %d, seq: %d, pos: %d\n", player, loc, seq, pos);
       uint8_t type = read_u8();
       uint32_t value = read_u32();
       Card card = get_card(player, loc, seq);
