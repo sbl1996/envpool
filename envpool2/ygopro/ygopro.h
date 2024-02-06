@@ -143,7 +143,7 @@ public:
       if ((desc == 0) || str.empty()) {
         s = "Activate " + name_ + ".";
       } else {
-        s = str;
+        s = name_ + " (" + str + ")";
         e = true;
       }
     } else {
@@ -354,10 +354,10 @@ public:
   template <typename Config>
   static decltype(auto) StateSpec(const Config &conf) {
     return MakeDict(
-        "obs:cards_"_.Bind(Spec<uint8_t>({conf["max_cards"_] * 2, 37})),
+        "obs:cards_"_.Bind(Spec<uint8_t>({conf["max_cards"_] * 2, 38})),
         "obs:global_"_.Bind(Spec<uint8_t>({8})),
-        "obs:actions_"_.Bind(Spec<uint8_t>({conf["max_options"_], 7})),
-        "obs:history_actions_"_.Bind(Spec<uint8_t>({conf["n_history_actions"_], 7})),
+        "obs:actions_"_.Bind(Spec<uint8_t>({conf["max_options"_], 8})),
+        "obs:history_actions_"_.Bind(Spec<uint8_t>({conf["n_history_actions"_], 8})),
         "info:num_options"_.Bind(Spec<int>({}, {0, conf["max_options"_] - 1})));
   }
   template <typename Config>
@@ -517,7 +517,7 @@ public:
         verbose_(spec.config["verbose"_]), max_options_(spec.config["max_options"_]),
         max_cards_(spec.config["max_cards"_]), n_history_actions_(spec.config["n_history_actions"_]) {
 
-    history_actions_ = TArray<uint8_t>(Array(ShapeSpec(sizeof(uint8_t), {n_history_actions_, 7})));
+    history_actions_ = TArray<uint8_t>(Array(ShapeSpec(sizeof(uint8_t), {n_history_actions_, 8})));
     prev_code_ids_ = std::vector<uint32_t>(max_options_, 0);
     // if (verbose_) {
     //   std::cout << "Loaded " << main_deck1_.size()
@@ -754,6 +754,10 @@ private:
     feat(i, 6) = position2id.at(position);
   }
 
+  void _set_obs_action_option(TArray<uint8_t> &feat, int i, char option) {
+    feat(i, 7) = option - '0';
+  }
+
   void _set_obs_action(TArray<uint8_t> &feat, int i, int msg, const std::string &option,
                        const std::unordered_map<std::string, int> &spec2index, uint8_t code_id = 0) {
     _set_obs_action_msg(feat, i, msg);
@@ -796,12 +800,10 @@ private:
         _set_obs_action_act(feat, i, act);
         _set_obs_action_spec(feat, i, spec, spec2index, code_id);
       }
+    } else if (msg == MSG_SELECT_OPTION) {
+      _set_obs_action_option(feat, i, option[0]);
     } else {
-      if (verbose_) {
-        printf("Unsupported message %s\n", msg_to_string(msg).c_str());
-      } else {
-        throw std::runtime_error("Unsupported message " + std::to_string(msg));
-      }
+      throw std::runtime_error("Unsupported message " + std::to_string(msg));
     }
   }
 
@@ -895,8 +897,8 @@ private:
     }
 
     int n1 = n_history_actions_ - ha_p_;
-    state["obs:history_actions_"_].Assign((uint8_t *)history_actions_[ha_p_].Data(), 7 * n1);
-    state["obs:history_actions_"_][n1].Assign((uint8_t *)history_actions_.Data(), 7 * ha_p_);
+    state["obs:history_actions_"_].Assign((uint8_t *)history_actions_[ha_p_].Data(), 8 * n1);
+    state["obs:history_actions_"_][n1].Assign((uint8_t *)history_actions_.Data(), 8 * ha_p_);
 
   }
 
@@ -1746,10 +1748,8 @@ private:
         loser->notify("You lost (" + l_reason + ").");
       }
     } else if (msg_ == MSG_RETRY) {
-      if (verbose_) {
-        printf("Retry\n");
-        throw std::runtime_error("Retry");
-      }
+      printf("Retry\n");
+      throw std::runtime_error("Retry");
     } else if (msg_ == MSG_SELECT_BATTLECMD) {
       auto player = read_u8();
       to_decide_ = player;
@@ -1860,15 +1860,10 @@ private:
       // unselect not allowed (no regrets!)
       dp_ += 8 * unselect_size;
 
-      if (min != max) {
-        printf("Min(%d) != Max(%d) not implemented, select_size: %d, unselect_size: %d\n",
-               min, max, select_size, unselect_size);
-
-        // throw std::runtime_error(
-        //     "Min(" + std::to_string(min) + ") != Max(" + std::to_string(max) +
-        //     ") not implemented, select_size: " + std::to_string(select_size) +
-        //     ", unselect_size: " + std::to_string(unselect_size));
-      }
+      // if (min != max) {
+      //   printf("Min(%d) != Max(%d) not implemented, select_size: %d, unselect_size: %d\n",
+      //          min, max, select_size, unselect_size);
+      // }
 
       for (int j = 0; j < select_specs.size(); ++j) {
         options_.push_back(select_specs[j]);
@@ -2235,7 +2230,10 @@ private:
           pl->notify(option + ": " + s);
         }
       } else {
-        dp_ += 4 * size;
+        for (int i = 0; i < size; ++i) {
+          dp_ += 4;
+          options_.push_back(std::to_string(i + 1));
+        }
       }
       callback_ = [this](int idx) {
         if (verbose_) {
@@ -2320,8 +2318,7 @@ private:
         std::string option = "v " + spec;
         options_.push_back(option);
         if (verbose_) {
-          pl->notify(option + ": " +
-                     c_get_card(code).get_effect_description(data));
+          pl->notify(option + ": " + c_get_card(code).get_effect_description(data));
         }
       }
 
