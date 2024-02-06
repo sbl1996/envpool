@@ -24,3 +24,6 @@
 	path = third_party/ygopro-core
 	url = https://github.com/Fluorohydride/ygopro-core.git
 	ignore = dirty
+[submodule "third_party/unordered_dense"]
+	path = third_party/unordered_dense
+	url = https://github.com/martinus/unordered_dense.git

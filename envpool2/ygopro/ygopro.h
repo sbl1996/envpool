@@ -18,33 +18,24 @@
 #define ENVPOOL_YGOPRO_YGOPRO_H_
 
 // clang-format off
-#include <algorithm>
-#include <cstdint>
 #include <cstdio>
-#include <functional>
-#include <iostream>
 #include <optional>
-#include <random>
 #include <shared_mutex>
-#include <string>
-#include <unordered_map>
-#include <utility>
-#include <vector>
+
+#include <SQLiteCpp/SQLiteCpp.h>
+#include <SQLiteCpp/VariadicBind.h>
 
 #include "envpool2/core/array.h"
 #include "envpool2/core/async_envpool.h"
 #include "envpool2/core/env.h"
 
-#include "envpool2/core/spec.h"
 #include "ygopro-core/common.h"
 #include "ygopro-core/card_data.h"
-#include "ygopro-core/field.h"
 #include "ygopro-core/ocgapi.h"
 
-#include <SQLiteCpp/SQLiteCpp.h>
-#include <SQLiteCpp/VariadicBind.h>
-
 #include "envpool2/ygopro/common.h"
+#include "envpool2/ygopro/player.h"
+#include "envpool2/ygopro/card.h"
 // clang-format on
 
 namespace ygopro {
@@ -53,111 +44,6 @@ using PlayerId = uint8_t;
 
 // TODO: 7% performance loss
 static std::shared_timed_mutex duel_mtx;
-
-class Card {
-  friend class YGOProEnv;
-
-protected:
-  uint32_t code_;
-  uint32_t alias_;
-  uint64_t setcode_;
-  uint32_t type_;
-  uint32_t level_;
-  uint32_t lscale_;
-  uint32_t rscale_;
-  int32_t attack_;
-  int32_t defense_;
-  uint32_t race_;
-  uint32_t attribute_;
-  uint32_t link_marker_;
-  // uint32_t category_;
-  std::string name_;
-  std::string desc_;
-  std::vector<std::string> strings_;
-
-  uint32_t data_ = 0;
-
-  PlayerId controler_ = 0;
-  uint32_t location_ = 0;
-  uint32_t sequence_ = 0;
-  uint32_t position_ = 0;
-
-public:
-  Card() = default;
-
-  Card(uint32_t code, uint32_t alias, uint64_t setcode, uint32_t type,
-       uint32_t level, uint32_t lscale, uint32_t rscale, int32_t attack,
-       int32_t defense, uint32_t race, uint32_t attribute, uint32_t link_marker,
-       const std::string &name, const std::string &desc,
-       const std::vector<std::string> &strings)
-      : code_(code), alias_(alias), setcode_(setcode), type_(type),
-        level_(level), lscale_(lscale), rscale_(rscale), attack_(attack),
-        defense_(defense), race_(race), attribute_(attribute),
-        link_marker_(link_marker), name_(name), desc_(desc), strings_(strings) {
-  }
-
-  ~Card() = default;
-
-  void set_location(uint32_t location) {
-    controler_ = location & 0xff;
-    location_ = (location >> 8) & 0xff;
-    sequence_ = (location >> 16) & 0xff;
-    position_ = (location >> 24) & 0xff;
-  }
-
-  const std::string &name() const { return name_; }
-  const std::string &desc() const { return desc_; }
-  const uint32_t &type() const { return type_; }
-  const uint32_t &level() const { return level_; }
-  const std::vector<std::string> &strings() const { return strings_; }
-
-  std::string get_spec(bool opponent) const {
-    return ls_to_spec(location_, sequence_, position_, opponent);
-  }
-
-  std::string get_spec(PlayerId player) const {
-    return get_spec(player != controler_);
-  }
-
-  uint32_t get_spec_code(PlayerId player) const {
-    return ls_to_spec_code(location_, sequence_, position_, player != controler_);
-  }
-
-  std::string get_position() const { return position_to_string(position_); }
-
-  std::string get_effect_description(uint32_t desc,
-                                     bool existing = false) const {
-    std::string s;
-    bool e = false;
-    auto code = code_;
-    if (desc > 10000) {
-      code = desc >> 4;
-    }
-    uint32_t offset = desc - code_ * 16;
-    bool in_range = (offset >= 0) && (offset < strings_.size());
-    std::string str = "";
-    if (in_range) {
-      str = ltrim(strings_[offset]);
-    }
-    if (in_range || desc == 0) {
-      if ((desc == 0) || str.empty()) {
-        s = "Activate " + name_ + ".";
-      } else {
-        s = name_ + " (" + str + ")";
-        e = true;
-      }
-    } else {
-      s = "TODO: system string " + std::to_string(desc);
-      if (!s.empty()) {
-        e = true;
-      }
-    }
-    if (existing && !e) {
-      s = "";
-    }
-    return s;
-  }
-};
 
 inline Card db_query_card(const SQLite::Database &db, uint32_t code) {
   SQLite::Statement query1(db, "SELECT * FROM datas WHERE id=?");
@@ -226,12 +112,17 @@ inline card_data db_query_card_data(const SQLite::Database &db, uint32_t code) {
   return card;
 }
 
-// TODO: use faster map (martinus/unordered_dense)
-static std::unordered_map<uint32_t, Card> cards_;
-static std::unordered_map<uint32_t, uint32_t> card_ids_;
-static std::unordered_map<uint32_t, card_data> cards_data_;
-static std::unordered_map<std::string, std::vector<uint32_t>> main_decks_;
-static std::unordered_map<std::string, std::vector<uint32_t>> extra_decks_;
+struct card_script {
+  byte *buf;
+  int len;
+};
+
+static ankerl::unordered_dense::map<uint32_t, Card> cards_;
+static ankerl::unordered_dense::map<uint32_t, uint32_t> card_ids_;
+static ankerl::unordered_dense::map<uint32_t, card_data> cards_data_;
+static ankerl::unordered_dense::map<std::string, card_script> cards_script_;
+static ankerl::unordered_dense::map<std::string, std::vector<uint32_t>> main_decks_;
+static ankerl::unordered_dense::map<std::string, std::vector<uint32_t>> extra_decks_;
 
 inline const Card &c_get_card(uint32_t code) { return cards_.at(code); }
 
@@ -309,9 +200,49 @@ inline uint32 card_reader_callback(uint32 code, card_data *card) {
   return 0;
 }
 
+static std::shared_timed_mutex scripts_mtx;
+
+
+inline byte *read_card_script(const std::string &path, int *lenptr) {
+  std::ifstream file(path, std::ios::binary);
+  if (!file) {
+    return nullptr;
+  }
+  file.seekg(0, std::ios::end);
+  int len = file.tellg();
+  file.seekg(0, std::ios::beg);
+  byte *buf = new byte[len];
+  file.read((char *)buf, len);
+  *lenptr = len;
+  return buf;
+}
+
+
+inline byte *script_reader_callback(const char *name, int *lenptr) {
+  std::string path(name);
+  std::shared_lock<std::shared_timed_mutex> lock(scripts_mtx);
+  auto it = cards_script_.find(path);
+  if (it == cards_script_.end()) {
+    lock.unlock();
+    int len;
+    byte *buf = read_card_script(path, &len);
+    if (buf == nullptr) {
+      return nullptr;
+    }
+    std::unique_lock<std::shared_timed_mutex> ulock(scripts_mtx);
+    cards_script_[path] = {buf, len};
+    it = cards_script_.find(path);
+  }
+  *lenptr = it->second.len;
+  return it->second.buf;
+}
+
+
+
+
 static void
 init_module(const std::string &db_path, const std::string &code_list_file,
-            const std::unordered_map<std::string, std::string> &decks) {
+            const std::map<std::string, std::string> &decks) {
   // parse code from code_list_file
   std::ifstream file(code_list_file);
   std::string line;
@@ -367,76 +298,6 @@ public:
   }
 };
 
-class Player {
-  friend class YGOProEnv;
-
-protected:
-  const std::string nickname_;
-  const int init_lp_;
-  const PlayerId duel_player_;
-  const bool verbose_;
-
-  bool seen_waiting_ = false;
-
-public:
-  Player(const std::string &nickname, int init_lp, PlayerId duel_player,
-         bool verbose = false)
-      : nickname_(nickname), init_lp_(init_lp), duel_player_(duel_player),
-        verbose_(verbose) {}
-  virtual ~Player() = default;
-
-  void notify(const std::string &text) {
-    if (verbose_) {
-      printf("%d %s\n", duel_player_, text.c_str());
-    }
-  }
-
-  const int &init_lp() const { return init_lp_; }
-
-  const std::string &nickname() const { return nickname_; }
-
-  virtual int think(const std::vector<std::string> &options) = 0;
-};
-
-class GreedyAI : public Player {
-protected:
-public:
-  GreedyAI(const std::string &nickname, int init_lp, PlayerId duel_player,
-           bool verbose = false)
-      : Player(nickname, init_lp, duel_player, verbose) {}
-
-  int think(const std::vector<std::string> &options) override { return 0; }
-};
-
-class HumanPlayer : public Player {
-protected:
-public:
-  HumanPlayer(const std::string &nickname, int init_lp, PlayerId duel_player,
-              bool verbose = false)
-      : Player(nickname, init_lp, duel_player, verbose) {}
-
-  int think(const std::vector<std::string> &options) override {
-    while (true) {
-      std::string input;
-      std::getline(std::cin, input);
-      if (input == "quit") {
-        exit(0);
-      }
-      // check if option in options
-      auto it = std::find(options.begin(), options.end(), input);
-      if (it != options.end()) {
-        return std::distance(options.begin(), it);
-      } else {
-        printf("Choose from");
-        for (const auto &option : options) {
-          printf(" %s", option.c_str());
-        }
-        printf("\n");
-      }
-    }
-  }
-};
-
 using YGOProEnvSpec = EnvSpec<YGOProEnvFns>;
 
 class YGOProEnv : public Env<YGOProEnvSpec> {
@@ -472,7 +333,7 @@ protected:
 
   int msg_;
   std::vector<std::string> options_;
-  PlayerId to_decide_;
+  PlayerId to_play_;
   std::function<void(int)> callback_;
 
   byte data_[4096];
@@ -634,7 +495,7 @@ public:
 
 private:
   void _set_obs_cards(TArray<uint8_t> &feat,
-                      std::unordered_map<std::string, int> &spec2index,
+                      ankerl::unordered_dense::map<std::string, int> &spec2index,
                       PlayerId player, bool opponent) {
     const auto &shape = feat.Shape();
     auto n1 = shape[0];
@@ -721,7 +582,7 @@ private:
 
   void _set_obs_action_spec(
     TArray<uint8_t> &feat, int i, const std::string &spec,
-    const std::unordered_map<std::string, int> &spec2index, uint8_t code_id = 0) {
+    const ankerl::unordered_dense::map<std::string, int> &spec2index, uint8_t code_id = 0) {
     if (spec2index.empty()) {
       feat(i, 0) = code_id;
     } else {
@@ -759,7 +620,7 @@ private:
   }
 
   void _set_obs_action(TArray<uint8_t> &feat, int i, int msg, const std::string &option,
-                       const std::unordered_map<std::string, int> &spec2index, uint8_t code_id = 0) {
+                       const ankerl::unordered_dense::map<std::string, int> &spec2index, uint8_t code_id = 0) {
     _set_obs_action_msg(feat, i, msg);
     if (msg == MSG_SELECT_IDLECMD) {
       if (option == "b" || option == "e") {
@@ -847,7 +708,7 @@ private:
   }
 
   void _set_obs_actions(TArray<uint8_t> &feat,
-                        const std::unordered_map<std::string, int> &spec2index,
+                        const ankerl::unordered_dense::map<std::string, int> &spec2index,
                         int msg, const std::vector<std::string> &options) {
     for (int i = 0; i < options.size(); ++i) {
       _set_obs_action(feat, i, msg, options[i], spec2index);
@@ -866,7 +727,7 @@ private:
       return;
     }
 
-    std::unordered_map<std::string, int> spec2index;
+    ankerl::unordered_dense::map<std::string, int> spec2index;
     _set_obs_cards(state["obs:cards_"_], spec2index, ai_player_, false);
     _set_obs_cards(state["obs:cards_"_], spec2index, 1 - ai_player_, true);
     _set_obs_global(state["obs:global_"_], ai_player_);
@@ -903,7 +764,7 @@ private:
   }
 
   void show_decision(int idx) {
-    printf("Player %d chose '%s' in [", to_decide_, options_[idx].c_str());
+    printf("Player %d chose '%s' in [", to_play_, options_[idx].c_str());
     int n = options_.size();
     for (int i = 0; i < n; ++i) {
       printf(" '%s'", options_[i].c_str());
@@ -956,7 +817,7 @@ private:
         if (options_.empty()) {
           continue;
         }
-        if (to_decide_ == ai_player_) {
+        if (to_play_ == ai_player_) {
           if (msg_ == MSG_SELECT_PLACE) {
             callback_(0);
             // update_history_actions(0, msg_, options_[0]);
@@ -974,7 +835,7 @@ private:
             return;
           }
         } else {
-          auto idx = players_[to_decide_]->think(options_);
+          auto idx = players_[to_play_]->think(options_);
           callback_(idx);
           if (verbose_) {
             show_decision(idx);
@@ -1752,7 +1613,7 @@ private:
       throw std::runtime_error("Retry");
     } else if (msg_ == MSG_SELECT_BATTLECMD) {
       auto player = read_u8();
-      to_decide_ = player;
+      to_play_ = player;
       auto activatable = read_cardlist_spec(true);
       auto attackable = read_cardlist_spec(true, true);
       bool to_m2 = read_u8();
@@ -1818,7 +1679,7 @@ private:
     } else if (msg_ == MSG_SELECT_UNSELECT_CARD) {
       // TODO: multi select in one action
       auto player = read_u8();
-      to_decide_ = player;
+      to_play_ = player;
       bool finishable = read_u8();
       bool cancelable = read_u8();
       auto min = read_u8();
@@ -1879,7 +1740,7 @@ private:
 
     } else if (msg_ == MSG_SELECT_CARD) {
       auto player = read_u8();
-      to_decide_ = player;
+      to_play_ = player;
       bool cancelable = read_u8();
       auto min = read_u8();
       auto max = read_u8();
@@ -1944,7 +1805,7 @@ private:
       };
     } else if (msg_ == MSG_SELECT_TRIBUTE) {
       auto player = read_u8();
-      to_decide_ = player;
+      to_play_ = player;
       bool cancelable = read_u8();
       auto min = read_u8();
       auto max = read_u8();
@@ -2026,7 +1887,7 @@ private:
       };
     } else if (msg_ == MSG_SELECT_CHAIN) {
       auto player = read_u8();
-      to_decide_ = player;
+      to_play_ = player;
       auto size = read_u8();
       auto spe_count = read_u8();
       bool forced = read_u8();
@@ -2079,8 +1940,8 @@ private:
       }
 
       std::vector<int> chain_index;
-      std::unordered_map<uint32_t, int> chain_counts;
-      std::unordered_map<uint32_t, int> chain_orders;
+      ankerl::unordered_dense::map<uint32_t, int> chain_counts;
+      ankerl::unordered_dense::map<uint32_t, int> chain_orders;
       std::vector<std::string> chain_specs;
       std::vector<std::string> effect_descs;
       for (int i = 0; i < size; i++) {
@@ -2135,7 +1996,7 @@ private:
       };
     } else if (msg_ == MSG_SELECT_YESNO) {
       auto player = read_u8();
-      to_decide_ = player;
+      to_play_ = player;
 
       if (verbose_) {
         auto desc = read_u32();
@@ -2171,7 +2032,7 @@ private:
       };
     } else if (msg_ == MSG_SELECT_EFFECTYN) {
       auto player = read_u8();
-      to_decide_ = player;
+      to_play_ = player;
 
       if (verbose_) {
         uint32_t code = read_u32();
@@ -2211,7 +2072,7 @@ private:
       };
     } else if (msg_ == MSG_SELECT_OPTION) {
       auto player = read_u8();
-      to_decide_ = player;
+      to_play_ = player;
       auto size = read_u8();
       if (verbose_) {
         auto pl = players_[player];
@@ -2237,8 +2098,8 @@ private:
       }
       callback_ = [this](int idx) {
         if (verbose_) {
-          players_[to_decide_]->notify("You selected option " + options_[idx] + ".");
-          players_[1 - to_decide_]->notify(players_[to_decide_]->nickname_ +
+          players_[to_play_]->notify("You selected option " + options_[idx] + ".");
+          players_[1 - to_play_]->notify(players_[to_play_]->nickname_ +
                                            " selected option " + options_[idx] +
                                            ".");
         }
@@ -2247,7 +2108,7 @@ private:
       };
     } else if (msg_ == MSG_SELECT_IDLECMD) {
       int32_t player = read_u8();
-      to_decide_ = player;
+      to_play_ = player;
       auto summonable_ = read_cardlist_spec();
       auto spsummon_ = read_cardlist_spec();
       auto repos_ = read_cardlist_spec();
@@ -2304,7 +2165,7 @@ private:
           pl->notify(option + ": Special summon " + name + ".");
         }
       }
-      std::unordered_map<std::string, int> idle_activate_count;
+      ankerl::unordered_dense::map<std::string, int> idle_activate_count;
       for (const auto &[code, spec, data] : idle_activate_) {
         idle_activate_count[spec] += 1;
       }
@@ -2409,7 +2270,7 @@ private:
       };
     } else if (msg_ == MSG_SELECT_PLACE) {
       auto player = read_u8();
-      to_decide_ = player;
+      to_play_ = player;
       auto count = read_u8();
       if (count == 0) {
         count = 1;
@@ -2445,7 +2306,7 @@ private:
       };
     } else if (msg_ == MSG_SELECT_POSITION) {
       auto player = read_u8();
-      to_decide_ = player;
+      to_play_ = player;
       auto code = read_u32();
       auto valid_pos = read_u8();
 
