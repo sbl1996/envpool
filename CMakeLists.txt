@@ -24,11 +24,11 @@ if(result)
     set_target_properties(ygopro_envpool PROPERTIES INTERPROCEDURAL_OPTIMIZATION TRUE)
 endif()
 
-# file(GLOB CORE_SRC CONFIGURE_DEPENDS
-#      "envpool2/core/*.h" "third_party/ygopro-core/*.h" "third_party/lua-cmake/src/*.h" "third_party/lua-cmake/src/*.h.in"
+# file(GLOB core_envpool_SRC CONFIGURE_DEPENDS
+#      "envpool2/core/*.h"
+#      "third_party/SQLiteCpp/include/SQLiteCpp/*.h"
 # )
-
-# target_precompile_headers(ygopro_envpool PRIVATE ${CORE_SRC})
+# target_precompile_headers(ygopro_envpool PRIVATE ${core_envpool_SRC})
 
 
 pybind_move_target(ygopro_envpool envpool2/ygopro)
