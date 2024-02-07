@@ -25,7 +25,6 @@
 #include <memory>
 #include <numeric>
 #include <tuple>
-#include <type_traits>
 #include <utility>
 #include <vector>
 

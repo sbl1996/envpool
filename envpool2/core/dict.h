@@ -20,7 +20,6 @@
 #include <glog/logging.h>
 
 #include <algorithm>
-#include <functional>
 #include <string>
 #include <tuple>
 #include <type_traits>

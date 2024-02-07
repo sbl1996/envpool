@@ -28,7 +28,6 @@
 #include "envpool2/core/action_buffer_queue.h"
 #include "envpool2/core/array.h"
 #include "envpool2/core/envpool.h"
-#include "envpool2/core/spec.h"
 #include "envpool2/core/state_buffer_queue.h"
 /**
  * Async EnvPool

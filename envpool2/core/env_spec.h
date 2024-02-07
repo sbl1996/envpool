@@ -20,7 +20,6 @@
 #include <limits>
 #include <string>
 
-#include "envpool2/core/array.h"
 #include "envpool2/core/dict.h"
 
 auto common_config =

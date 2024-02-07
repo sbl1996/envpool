@@ -19,7 +19,6 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <list>
 #include <memory>
 #include <thread>
 #include <utility>
@@ -29,7 +28,6 @@
 #include "envpool2/core/circular_buffer.h"
 #include "envpool2/core/spec.h"
 #include "envpool2/core/state_buffer.h"
-#include "concurrentqueue/lightweightsemaphore.h"
 
 class StateBufferQueue {
  protected:

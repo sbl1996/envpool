@@ -13,7 +13,7 @@ include("${PROJECT_SOURCE_DIR}/cmake/Helper.cmake")
 
 add_subdirectory(third_party)
 
-pybind11_add_module(ygopro_envpool envpool2/ygopro/ygopro.cpp envpool2/ygopro/card.cpp envpool2/ygopro/player.cpp envpool2/ygopro/common.cpp)
+pybind11_add_module(ygopro_envpool envpool2/ygopro/ygopro.cpp)
 target_link_libraries(ygopro_envpool PRIVATE glog::glog SQLiteCpp sqlite3 ycore unordered_dense::unordered_dense -static-libstdc++)
 target_include_directories(
     ygopro_envpool PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
@@ -23,5 +23,12 @@ check_ipo_supported(RESULT result)
 if(result)
     set_target_properties(ygopro_envpool PROPERTIES INTERPROCEDURAL_OPTIMIZATION TRUE)
 endif()
+
+# file(GLOB CORE_SRC CONFIGURE_DEPENDS
+#      "envpool2/core/*.h" "third_party/ygopro-core/*.h" "third_party/lua-cmake/src/*.h" "third_party/lua-cmake/src/*.h.in"
+# )
+
+# target_precompile_headers(ygopro_envpool PRIVATE ${CORE_SRC})
+
 
 pybind_move_target(ygopro_envpool envpool2/ygopro)
