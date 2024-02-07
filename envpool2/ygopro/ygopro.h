@@ -1116,7 +1116,8 @@ public:
         "obs:history_actions_"_.Bind(Spec<uint8_t>({conf["n_history_actions"_], 8})),
         "info:num_options"_.Bind(Spec<int>({}, {0, conf["max_options"_] - 1})),
         "info:to_play"_.Bind(Spec<int>({}, {0, 1})),
-        "info:is_selfplay"_.Bind(Spec<int>({}, {0, 1}))
+        "info:is_selfplay"_.Bind(Spec<int>({}, {0, 1})),
+        "info:win_reason"_.Bind(Spec<int>({}, {-1, 1}))
     );
   }
   template <typename Config>
@@ -1367,17 +1368,31 @@ public:
     callback_(idx);
     update_history_actions(to_play_, idx);
 
+    PlayerId player = to_play_;
+
     if (verbose_) {
       show_decision(idx);
     }
 
     next();
     float reward = 0;
+    int reason = 0;
     if (done_) {
-      reward = winner_ == to_play_ ? 1.0 : -1.0;
+      if (play_mode_ == kSelfPlay) {
+        // to_play_ is the previous player
+        reward = winner_ == to_play_ ? 1.0 : -1.0;
+      } else {
+        reward = winner_ == ai_player_ ? 1.0 : -1.0;
+      }
+
+      if (win_reason_ == 0x01) {
+        reason = 1;
+      } else if (win_reason_ == 0x02) {
+        reason = -1;
+      }
     }
 
-    WriteState(reward);
+    WriteState(reward, win_reason_);
 
     // double seconds = static_cast<double>(clock() - start) / CLOCKS_PER_SEC;
     // // update step_time by moving average
@@ -1609,13 +1624,14 @@ private:
     }
   }
 
-  void WriteState(float reward) {
+  void WriteState(float reward, int win_reason = 0) {
     State state = Allocate();
 
     int n_options = options_.size();
     state["reward"_] = reward;
     state["info:to_play"_] = int(to_play_);
     state["info:is_selfplay"_] = int(play_mode_ == kSelfPlay);
+    state["info:win_reason"_] = win_reason;
 
     if (n_options == 0) {
       state["info:num_options"_] = 1;
