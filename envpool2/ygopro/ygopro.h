@@ -40,7 +40,6 @@
 
 namespace ygopro {
 
-using PlayerId = uint8_t;
 
 // TODO: 7% performance loss
 static std::shared_timed_mutex duel_mtx;
@@ -289,7 +288,10 @@ public:
         "obs:global_"_.Bind(Spec<uint8_t>({8})),
         "obs:actions_"_.Bind(Spec<uint8_t>({conf["max_options"_], 8})),
         "obs:history_actions_"_.Bind(Spec<uint8_t>({conf["n_history_actions"_], 8})),
-        "info:num_options"_.Bind(Spec<int>({}, {0, conf["max_options"_] - 1})));
+        "info:num_options"_.Bind(Spec<int>({}, {0, conf["max_options"_] - 1})),
+        "info:to_play"_.Bind(Spec<int>({}, {0, 1})),
+        "info:is_selfplay"_.Bind(Spec<int>({}, {0, 1}))
+    );
   }
   template <typename Config>
   static decltype(auto) ActionSpec(const Config &conf) {
@@ -300,20 +302,62 @@ public:
 
 using YGOProEnvSpec = EnvSpec<YGOProEnvFns>;
 
+enum PlayMode {
+  kHuman,
+  kSelfPlay,
+  kRandomBot,
+  kGreedyBot,
+  kCount
+};
+
+// parse play modes seperated by '+'
+inline std::vector<PlayMode> parse_play_modes(const std::string &play_mode) {
+  std::vector<PlayMode> modes;
+  std::istringstream ss(play_mode);
+  std::string token;
+  while (std::getline(ss, token, '+')) {
+    if (token == "human") {
+      modes.push_back(kHuman);
+    } else if (token == "self") {
+      modes.push_back(kSelfPlay);
+    } else if (token == "bot") {
+      modes.push_back(kRandomBot);
+    } else if (token == "greedy") {
+      modes.push_back(kGreedyBot);
+    } else {
+      throw std::runtime_error("Unknown play mode: " + token);
+    }
+  }
+  // human mode can't be combined with other modes
+  if (std::find(modes.begin(), modes.end(), kHuman) != modes.end() &&
+      modes.size() > 1) {
+    throw std::runtime_error("Human mode can't be combined with other modes");
+  }
+  return modes;
+}
+
 class YGOProEnv : public Env<YGOProEnvSpec> {
 protected:
+  std::vector<uint32> main_deck0_;
   std::vector<uint32> main_deck1_;
-  std::vector<uint32> main_deck2_;
+  std::vector<uint32> extra_deck0_;
   std::vector<uint32> extra_deck1_;
-  std::vector<uint32> extra_deck2_;
 
-  int player_;
-  const std::string play_mode_;
+  const std::vector<PlayMode> play_modes_;
+
+  // if play_mode_ == 'bot' or 'human', player_ is the order of the ai player
+  // -1 means random, 0 and 1 means the first and second player respectively
+  const int player_;
+
+  PlayMode play_mode_;
   bool verbose_ = false;
 
   int max_episode_steps_, elapsed_step_;
-  intptr_t pduel_;
+
+
   PlayerId ai_player_;
+
+  intptr_t pduel_;
   Player *players_[2];
 
   std::uniform_int_distribution<uint64_t> dist_int_;
@@ -361,33 +405,35 @@ protected:
   uint64_t reset_time_count_ = 0;
 
   const int n_history_actions_;
-  TArray<uint8_t> history_actions_;
-  int ha_p_ = 0;
-  std::vector<uint32_t> prev_code_ids_;
+
+  // circular buffer for history actions of ai player or player 0 (selfplay mode)
+  TArray<uint8_t> history_actions_0_;
+  int ha_p_0_ = 0;
+  std::vector<uint32_t> prev_code_ids_0_;
+
+  // circular buffer for history actions of player 1
+  TArray<uint8_t> history_actions_1_;
+  int ha_p_1_ = 0;
+  std::vector<uint32_t> prev_code_ids_1_;
 
 public:
   YGOProEnv(const Spec &spec, int env_id)
       : Env<YGOProEnvSpec>(spec, env_id),
         max_episode_steps_(spec.config["max_episode_steps"_]),
         elapsed_step_(max_episode_steps_ + 1), dist_int_(0, 0xffffffff),
-        main_deck1_(main_decks_.at(spec.config["deck1"_])),
-        main_deck2_(main_decks_.at(spec.config["deck2"_])),
-        extra_deck1_(extra_decks_.at(spec.config["deck1"_])),
-        extra_deck2_(extra_decks_.at(spec.config["deck2"_])),
-        player_(spec.config["player"_]), play_mode_(spec.config["play_mode"_]),
+        main_deck0_(main_decks_.at(spec.config["deck1"_])),
+        main_deck1_(main_decks_.at(spec.config["deck2"_])),
+        extra_deck0_(extra_decks_.at(spec.config["deck1"_])),
+        extra_deck1_(extra_decks_.at(spec.config["deck2"_])),
+        player_(spec.config["player"_]), play_modes_(parse_play_modes(spec.config["play_mode"_])),
         verbose_(spec.config["verbose"_]), max_options_(spec.config["max_options"_]),
         max_cards_(spec.config["max_cards"_]), n_history_actions_(spec.config["n_history_actions"_]) {
 
-    history_actions_ = TArray<uint8_t>(Array(ShapeSpec(sizeof(uint8_t), {n_history_actions_, 8})));
-    prev_code_ids_ = std::vector<uint32_t>(max_options_, 0);
-    // if (verbose_) {
-    //   std::cout << "Loaded " << main_deck1_.size()
-    //             << " cards in main deck 1 and " << extra_deck1_.size()
-    //             << " cards in extra deck 1" << std::endl;
-    //   std::cout << "Loaded " << main_deck1_.size()
-    //             << " cards in main deck 1 and " << extra_deck1_.size()
-    //             << " cards in extra deck 1" << std::endl;
-    // }
+    history_actions_0_ = TArray<uint8_t>(Array(ShapeSpec(sizeof(uint8_t), {n_history_actions_, 8})));
+    prev_code_ids_0_ = std::vector<uint32_t>(max_options_, 0);
+
+    history_actions_1_ = TArray<uint8_t>(Array(ShapeSpec(sizeof(uint8_t), {n_history_actions_, 8})));
+    prev_code_ids_1_ = std::vector<uint32_t>(max_options_, 0);
   }
 
   ~YGOProEnv() {
@@ -400,16 +446,30 @@ public:
 
   bool IsDone() override { return done_; }
 
+  bool random_mode() const { return play_modes_.size() > 1; }
+
+  bool self_play() const { return std::find(play_modes_.begin(), play_modes_.end(), kSelfPlay) != play_modes_.end(); }
+
   void Reset() override {
     // clock_t start = clock();
-
-    if (player_ == -1) {
-      ai_player_ = dist_int_(gen_) % 2;
+    if (random_mode()) {
+      play_mode_ = play_modes_[dist_int_(gen_) % play_modes_.size()];
     } else {
-      ai_player_ = player_;
+      play_mode_ = play_modes_[0];
     }
 
-    history_actions_.Zero();
+    if (play_mode_ != kSelfPlay) {
+      if (player_ == -1) {
+        ai_player_ = dist_int_(gen_) % 2;
+      } else {
+        ai_player_ = player_;
+      }
+    }
+
+    history_actions_0_.Zero();
+    history_actions_1_.Zero();
+    ha_p_0_ = 0;
+    ha_p_1_ = 0;
 
     unsigned long duel_seed = dist_int_(gen_);
 
@@ -423,7 +483,7 @@ public:
       }
       std::string nickname = i == 0 ? "Alice" : "Bob";
       int init_lp = 8000;
-      if ((i != ai_player_) && (play_mode_ == "human")) {
+      if ((play_mode_ == kHuman) && (i != ai_player_)) {
         players_[i] = new HumanPlayer(nickname, init_lp, i, verbose_);
       } else {
         players_[i] = new GreedyAI(nickname, init_lp, i, verbose_);
@@ -460,9 +520,18 @@ public:
 
   }
 
-  void update_history_actions(int idx, int msg, const std::string &option, uint32_t code_id = 0) {
-    _set_obs_action(history_actions_, ha_p_, msg, option, {}, code_id);
-    ha_p_ = (ha_p_ + 1) % n_history_actions_;
+  void update_prev_code_id_from_options(PlayerId player, int idx) {
+    auto& prev_code_ids = player == 0 ? prev_code_ids_0_ : prev_code_ids_1_;
+    prev_code_ids[idx] = get_prev_code_id(options_[idx], player);
+  }
+
+  void update_history_actions(PlayerId player, int idx) {
+    auto &history_actions = player == 0 ? history_actions_0_ : history_actions_1_;
+    auto &ha_p = player == 0 ? ha_p_0_ : ha_p_1_;
+    const auto& prev_code_ids = player == 0 ? prev_code_ids_0_ : prev_code_ids_1_;
+
+    _set_obs_action(history_actions, ha_p, msg_, options_[idx], {}, prev_code_ids[idx]);
+    ha_p = (ha_p + 1) % n_history_actions_;
   }
 
   void Step(const Action &action) override {
@@ -470,7 +539,7 @@ public:
 
     int idx = action["action"_];
     callback_(idx);
-    update_history_actions(idx, msg_, options_[idx], prev_code_ids_[idx]);
+    update_history_actions(to_play_, idx);
 
     if (verbose_) {
       show_decision(idx);
@@ -479,7 +548,7 @@ public:
     next();
     float reward = 0;
     if (done_) {
-      reward = winner_ == ai_player_ ? 1.0 : -1.0;
+      reward = winner_ == to_play_ ? 1.0 : -1.0;
     }
 
     WriteState(reward);
@@ -668,40 +737,39 @@ private:
     }
   }
 
-  uint8_t spec_to_card_id(const std::string &spec) {
-    PlayerId player = ai_player_;
+  uint8_t spec_to_card_id(const std::string &spec, PlayerId player) {
     int offset = 0;
     if (spec[0] == 'o') {
-      player = 1 - ai_player_;
+      player = 1 - player;
       offset++;
     }
     auto [loc, seq, pos] = spec_to_ls(spec.substr(offset));
     return card_ids_.at(get_card_code(player, loc, seq));
   }
 
-  uint8_t get_prev_code_id(const std::string &option) {
+  uint8_t get_prev_code_id(const std::string &option, PlayerId player) {
     uint8_t code_id = 0;
     if (msg_ == MSG_SELECT_IDLECMD) {
       if (!(option == "b" || option == "e")) {
-        code_id = spec_to_card_id(option.substr(2));
+        code_id = spec_to_card_id(option.substr(2), player);
       }
     } else if (msg_ == MSG_SELECT_CHAIN) {
       if (option != "c") {
-        code_id = spec_to_card_id(option);
+        code_id = spec_to_card_id(option, player);
       }
     } else if (msg_ == MSG_SELECT_CARD || msg_ == MSG_SELECT_TRIBUTE) {
       // TODO: Multi-select
       auto idx = option.find_first_of(" ");
       if (idx == std::string::npos) {
-        code_id = spec_to_card_id(option);
+        code_id = spec_to_card_id(option, player);
       } else {
-        code_id = spec_to_card_id(option.substr(0, idx));
+        code_id = spec_to_card_id(option.substr(0, idx), player);
       }
     } else if (msg_ == MSG_SELECT_UNSELECT_CARD) {
-      code_id = spec_to_card_id(option);
+      code_id = spec_to_card_id(option, player);
     } else if (msg_ == MSG_SELECT_BATTLECMD) {
       if (!(option == "m" || option == "e")) {
-        code_id = spec_to_card_id(option.substr(2));
+        code_id = spec_to_card_id(option.substr(2), player);
       }
     }
     return code_id;
@@ -720,6 +788,8 @@ private:
 
     int n_options = options_.size();
     state["reward"_] = reward;
+    state["info:to_play"_] = int(to_play_);
+    state["info:is_selfplay"_] = int(play_mode_ == kSelfPlay);
 
     if (n_options == 0) {
       state["info:num_options"_] = 1;
@@ -728,9 +798,9 @@ private:
     }
 
     ankerl::unordered_dense::map<std::string, int> spec2index;
-    _set_obs_cards(state["obs:cards_"_], spec2index, ai_player_, false);
-    _set_obs_cards(state["obs:cards_"_], spec2index, 1 - ai_player_, true);
-    _set_obs_global(state["obs:global_"_], ai_player_);
+    _set_obs_cards(state["obs:cards_"_], spec2index, to_play_, false);
+    _set_obs_cards(state["obs:cards_"_], spec2index, 1 - to_play_, true);
+    _set_obs_global(state["obs:global_"_], to_play_);
 
     // we can't shuffle because idx must be stable in callback
     if (n_options > max_options_) {
@@ -748,19 +818,23 @@ private:
 
     _set_obs_actions(state["obs:actions_"_], spec2index, msg_, options_);
 
+    // update prev_code_ids from state
+    auto &prev_code_ids = to_play_ == 0 ? prev_code_ids_0_ : prev_code_ids_1_;
+
     for (int i = 0; i < n_options; ++i) {
       uint8_t spec_index = state["obs:actions_"_](i, 0);
       if (spec_index == 0) {
-        prev_code_ids_[i] = 0;
+        prev_code_ids[i] = 0;
       } else {
-        prev_code_ids_[i] = state["obs:cards_"_](spec_index, 0);
+        prev_code_ids[i] = state["obs:cards_"_](spec_index - 1, 0);
       }
     }
 
-    int n1 = n_history_actions_ - ha_p_;
-    state["obs:history_actions_"_].Assign((uint8_t *)history_actions_[ha_p_].Data(), 8 * n1);
-    state["obs:history_actions_"_][n1].Assign((uint8_t *)history_actions_.Data(), 8 * ha_p_);
-
+    const auto &ha_p = to_play_ == 0 ? ha_p_0_ : ha_p_1_;
+    const auto &history_actions = to_play_ == 0 ? history_actions_0_ : history_actions_1_;
+    int n1 = n_history_actions_ - ha_p;
+    state["obs:history_actions_"_].Assign((uint8_t *)history_actions[ha_p].Data(), 8 * n1);
+    state["obs:history_actions_"_][n1].Assign((uint8_t *)history_actions.Data(), 8 * ha_p);
   }
 
   void show_decision(int idx) {
@@ -776,9 +850,9 @@ private:
   }
 
   void load_deck(PlayerId player, bool shuffle = true) {
-    std::vector<uint32_t> &main_deck = player == 0 ? main_deck1_ : main_deck2_;
+    std::vector<uint32_t> &main_deck = player == 0 ? main_deck0_ : main_deck1_;
     std::vector<uint32_t> &extra_deck =
-        player == 0 ? extra_deck1_ : extra_deck2_;
+        player == 0 ? extra_deck0_ : extra_deck1_;
 
     if (shuffle) {
       std::shuffle(main_deck.begin(), main_deck.end(), gen_);
@@ -817,7 +891,7 @@ private:
         if (options_.empty()) {
           continue;
         }
-        if (to_play_ == ai_player_) {
+        if ((play_mode_ == kSelfPlay) || (to_play_ == ai_player_)) {
           if (msg_ == MSG_SELECT_PLACE) {
             callback_(0);
             // update_history_actions(0, msg_, options_[0]);
@@ -826,8 +900,8 @@ private:
             }
           } else if (options_.size() == 1) {
             callback_(0);
-            prev_code_ids_[0] = get_prev_code_id(options_[0]);
-            update_history_actions(0, msg_, options_[0], prev_code_ids_[0]);
+            update_prev_code_id_from_options(to_play_, 0);
+            update_history_actions(to_play_, 0);
             if (verbose_) {
               show_decision(0);
             }

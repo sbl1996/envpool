@@ -14,11 +14,6 @@
 """Entry point for all envs' registration."""
 
 try:
-  import envpool2.classic_control.registration  # noqa: F401
-except ImportError:
-  pass
-
-try:
   import envpool2.ygopro.registration  # noqa: F401
 except ImportError:
   pass

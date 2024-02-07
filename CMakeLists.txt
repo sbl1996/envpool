@@ -13,7 +13,7 @@ include("${PROJECT_SOURCE_DIR}/cmake/Helper.cmake")
 
 add_subdirectory(third_party)
 
-pybind11_add_module(ygopro_envpool envpool2/ygopro/ygopro.cc envpool2/ygopro/card.cpp envpool2/ygopro/player.cpp envpool2/ygopro/common.cpp)
+pybind11_add_module(ygopro_envpool envpool2/ygopro/ygopro.cpp envpool2/ygopro/card.cpp envpool2/ygopro/player.cpp envpool2/ygopro/common.cpp)
 target_link_libraries(ygopro_envpool PRIVATE glog::glog SQLiteCpp sqlite3 ycore unordered_dense::unordered_dense -static-libstdc++)
 target_include_directories(
     ygopro_envpool PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
