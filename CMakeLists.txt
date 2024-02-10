@@ -17,12 +17,9 @@ pybind11_add_module(ygopro_envpool envpool2/ygopro/ygopro.cpp)
 target_link_libraries(ygopro_envpool PRIVATE glog::glog SQLiteCpp sqlite3 ycore unordered_dense::unordered_dense)
 target_include_directories(
     ygopro_envpool PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
+set_target_properties(ygopro_envpool PROPERTIES INTERPROCEDURAL_OPTIMIZATION TRUE)
+pybind_move_target(ygopro_envpool envpool2/ygopro)
 
-include(CheckIPOSupported)
-check_ipo_supported(RESULT result)
-if(result)
-    set_target_properties(ygopro_envpool PROPERTIES INTERPROCEDURAL_OPTIMIZATION TRUE)
-endif()
 
 # file(GLOB core_envpool_SRC CONFIGURE_DEPENDS
 #      "envpool2/core/*.h"
@@ -31,4 +28,7 @@ endif()
 # target_precompile_headers(ygopro_envpool PRIVATE ${core_envpool_SRC})
 
 
-pybind_move_target(ygopro_envpool envpool2/ygopro)
+pybind11_add_module(dummy_envpool envpool2/dummy/dummy_envpool.cpp)
+target_link_libraries(dummy_envpool PRIVATE)
+target_include_directories(
+    dummy_envpool PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/third_party)

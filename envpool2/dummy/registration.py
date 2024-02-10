@@ -11,15 +11,15 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Entry point for all envs' registration."""
+"""Classic control env registration."""
 
-try:
-  import envpool2.ygopro.registration  # noqa: F401
-except ImportError:
-  pass
+from envpool2.registration import register
 
-
-try:
-  import envpool2.dummy.registration  # noqa: F401
-except ImportError:
-  pass
+register(
+  task_id="Dummy-v0",
+  import_path="envpool2.dummy",
+  spec_cls="DummyEnvSpec",
+  dm_cls="DummyDMEnvPool",
+  gym_cls="DummyGymEnvPool",
+  gymnasium_cls="DummyGymnasiumEnvPool",
+)
