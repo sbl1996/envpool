@@ -1193,20 +1193,19 @@ public:
                     "deck2"_.Bind(std::string("OldSchool")), "player"_.Bind(-1),
                     "play_mode"_.Bind(std::string("bot")),
                     "verbose"_.Bind(false), "max_options"_.Bind(16),
-                    "max_cards"_.Bind(75), "n_history_actions"_.Bind(8));
+                    "max_cards"_.Bind(75), "n_history_actions"_.Bind(16),
+                    "max_multi_select"_.Bind(4));
   }
   template <typename Config>
   static decltype(auto) StateSpec(const Config &conf) {
-    int n_action_feats = 15;
+    int n_action_feats = 9 + conf["max_multi_select"_] * 2;
     return MakeDict(
         "obs:cards_"_.Bind(Spec<uint8_t>({conf["max_cards"_] * 2, 39})),
         "obs:global_"_.Bind(Spec<uint8_t>({8})),
         "obs:actions_"_.Bind(
             Spec<uint8_t>({conf["max_options"_], n_action_feats})),
-        // "obs:h_action_ids_"_.Bind(
-        //     Spec<CardId>({conf["n_history_actions"_], 3})),
-        // "obs:h_actions_"_.Bind(
-        //     Spec<uint8_t>({conf["n_history_actions"_], n_action_feats - 3})),
+        "obs:h_actions_"_.Bind(
+            Spec<uint8_t>({conf["n_history_actions"_], n_action_feats})),
         "info:num_options"_.Bind(Spec<int>({}, {0, conf["max_options"_] - 1})),
         "info:to_play"_.Bind(Spec<int>({}, {0, 1})),
         "info:is_selfplay"_.Bind(Spec<int>({}, {0, 1})),
@@ -1313,16 +1312,15 @@ protected:
 
   const int n_history_actions_;
 
-  // circular buffer for history actions of ai player or player 0 (selfplay
-  // mode)
-  // TArray<uint8_t> history_actions_0_;
-  // int ha_p_0_ = 0;
-  // std::vector<std::vector<CardId>> h_card_ids_0_;
+  // circular buffer for history actions of player 0
+  TArray<uint8_t> history_actions_0_;
+  int ha_p_0_ = 0;
+  std::vector<std::vector<CardId>> h_card_ids_0_;
 
   // circular buffer for history actions of player 1
-  // TArray<uint8_t> history_actions_1_;
-  // int ha_p_1_ = 0;
-  // std::vector<std::vector<CardId>> h_card_ids_1_;
+  TArray<uint8_t> history_actions_1_;
+  int ha_p_1_ = 0;
+  std::vector<std::vector<CardId>> h_card_ids_1_;
 
   std::vector<std::string> revealed_;
 
@@ -1341,12 +1339,12 @@ public:
         n_history_actions_(spec.config["n_history_actions"_]) {
     int max_options = spec.config["max_options"_];
     int n_action_feats = spec.state_spec["obs:actions_"_].shape[1];
-    // h_card_ids_0_.resize(n_history_actions_);
-    // h_card_ids_1_.resize(n_history_actions_);
-    // history_actions_0_ = TArray<uint8_t>(Array(
-    //     ShapeSpec(sizeof(uint8_t), {n_history_actions_, n_action_feats})));
-    // history_actions_1_ = TArray<uint8_t>(Array(
-    //     ShapeSpec(sizeof(uint8_t), {n_history_actions_, n_action_feats})));
+    h_card_ids_0_.resize(max_options);
+    h_card_ids_1_.resize(max_options);
+    history_actions_0_ = TArray<uint8_t>(Array(
+        ShapeSpec(sizeof(uint8_t), {n_history_actions_, n_action_feats})));
+    history_actions_1_ = TArray<uint8_t>(Array(
+        ShapeSpec(sizeof(uint8_t), {n_history_actions_, n_action_feats})));
   }
 
   ~YGOProEnv() {
@@ -1443,28 +1441,30 @@ public:
     // }
   }
 
-  // void update_h_card_ids(PlayerId player, int idx) {
-  //   auto &h_card_ids = player == 0 ? h_card_ids_0_ : h_card_ids_1_;
-  //   h_card_ids[idx] = parse_card_ids(options_[idx], player);
-  // }
+  void update_h_card_ids(PlayerId player, int idx) {
+    auto &h_card_ids = player == 0 ? h_card_ids_0_ : h_card_ids_1_;
+    h_card_ids[idx] = parse_card_ids(options_[idx], player);
+  }
 
-  // void update_history_actions(PlayerId player, int idx) {
-  //   auto &history_actions =
-  //       player == 0 ? history_actions_0_ : history_actions_1_;
-  //   auto &ha_p = player == 0 ? ha_p_0_ : ha_p_1_;
-  //   const auto &h_card_ids = player == 0 ? h_card_ids_0_ : h_card_ids_1_;
+  void update_history_actions(PlayerId player, int idx) {
+    auto &history_actions =
+        player == 0 ? history_actions_0_ : history_actions_1_;
+    auto &ha_p = player == 0 ? ha_p_0_ : ha_p_1_;
+    const auto &h_card_ids = player == 0 ? h_card_ids_0_ : h_card_ids_1_;
 
-  //   _set_obs_action(history_actions, ha_p, msg_, options_[idx], {},
-  //                   h_card_ids[idx]);
-  //   ha_p = (ha_p + 1) % n_history_actions_;
-  // }
+    ha_p--;
+    if (ha_p < 0) {
+      ha_p = n_history_actions_ - 1;
+    }
+    _set_obs_action(history_actions, ha_p, msg_, options_[idx], {}, h_card_ids[idx]);
+  }
 
   void Step(const Action &action) override {
     // clock_t start = clock();
 
     int idx = action["action"_];
     callback_(idx);
-    // update_history_actions(to_play_, idx);
+    update_history_actions(to_play_, idx);
 
     PlayerId player = to_play_;
 
@@ -1519,6 +1519,7 @@ private:
           {LOCATION_EXTRA, true},
       };
       for (auto &[location, hidden_for_opponent] : configs) {
+        // check this
         if (opponent && (location == LOCATION_HAND) &&
             (revealed_.size() != 0)) {
           hidden_for_opponent = false;
@@ -1534,10 +1535,19 @@ private:
           std::vector<Card> cards = get_cards_in_location(player, location);
           for (int i = 0; i < cards.size(); ++i) {
             const auto &c = cards[i];
-            bool hide = opponent && (c.position_ & POS_FACEDOWN);
+            auto spec = c.get_spec(opponent);
+            bool hide = false;
+            if (opponent) {
+              hide = c.position_ & POS_FACEDOWN;
+              if ((location == LOCATION_HAND) && (
+                std::find(revealed_.begin(), revealed_.end(), spec) != revealed_.end()
+              )) {
+                hide = false;
+              }
+            }
             _set_obs_card_(f_cards, offset, c, hide);
             offset++;
-            spec2index[c.get_spec(opponent)] = static_cast<uint16_t>(offset);
+            spec2index[spec] = static_cast<uint16_t>(offset);
           }
         }
       }
@@ -1611,51 +1621,55 @@ private:
   }
 
   void _set_obs_action_spec(TArray<uint8_t> &feat, int i, int j,
-                            const std::string &spec,
-                            const SpecIndex &spec2index) {
-    uint16_t idx = spec2index.at(spec);
+                            const std::string &spec, const SpecIndex &spec2index,
+                            const std::vector<CardId> &card_ids) {
+    uint16_t idx = spec2index.empty() ? card_ids[j] : spec2index.at(spec);
     feat(i, 2*j) = static_cast<uint8_t>(idx >> 8);
     feat(i, 2*j + 1) = static_cast<uint8_t>(idx & 0xff);
   }
 
+  int _obs_action_feat_offset() const {
+    return spec_.config["max_multi_select"_] * 2;
+  }
+
   void _set_obs_action_msg(TArray<uint8_t> &feat, int i, int msg) {
-    feat(i, 6) = msg2id.at(msg);
+    feat(i, _obs_action_feat_offset()) = msg2id.at(msg);
   }
 
   void _set_obs_action_act(TArray<uint8_t> &feat, int i, char act,
                            uint8_t act_offset = 0) {
-    feat(i, 6 + 1) = cmd_act2id.at(act) + act_offset;
+    feat(i, _obs_action_feat_offset() + 1) = cmd_act2id.at(act) + act_offset;
   }
 
   void _set_obs_action_yesno(TArray<uint8_t> &feat, int i, char yesno) {
-    feat(i, 6 + 2) = cmd_yesno2id.at(yesno);
+    feat(i, _obs_action_feat_offset() + 2) = cmd_yesno2id.at(yesno);
   }
 
   void _set_obs_action_phase(TArray<uint8_t> &feat, int i, char phase) {
-    feat(i, 6 + 3) = cmd_phase2id.at(phase);
+    feat(i, _obs_action_feat_offset() + 3) = cmd_phase2id.at(phase);
   }
 
   void _set_obs_action_cancel_finish(TArray<uint8_t> &feat, int i, char c) {
     uint8_t v = c == 'c' ? 1 : (c == 'f' ? 2 : 0);
-    feat(i, 6 + 4) = v;
+    feat(i, _obs_action_feat_offset() + 4) = v;
   }
 
   void _set_obs_action_position(TArray<uint8_t> &feat, int i, char position) {
     position = 1 << (position - '1');
-    feat(i, 6 + 5) = position2id.at(position);
+    feat(i, _obs_action_feat_offset() + 5) = position2id.at(position);
   }
 
   void _set_obs_action_option(TArray<uint8_t> &feat, int i, char option) {
-    feat(i, 6 + 6) = option - '0';
+    feat(i, _obs_action_feat_offset() + 6) = option - '0';
   }
 
   void _set_obs_action_place(TArray<uint8_t> &feat, int i,
                              const std::string &spec) {
-    feat(i, 6 + 7) = cmd_place2id.at(spec);
+    feat(i, _obs_action_feat_offset() + 7) = cmd_place2id.at(spec);
   }
 
   void _set_obs_action_attrib(TArray<uint8_t> &feat, int i, uint8_t attrib) {
-    feat(i, 6 + 8) = attribute2id.at(attrib);
+    feat(i, _obs_action_feat_offset() + 8) = attribute2id.at(attrib);
   }
 
   void _set_obs_action(TArray<uint8_t> &feat, int i, int msg,
@@ -1676,7 +1690,7 @@ private:
         }
         _set_obs_action_act(feat, i, act, offset);
 
-        _set_obs_action_spec(feat, i, 0, spec, spec2index);
+        _set_obs_action_spec(feat, i, 0, spec, spec2index, card_ids);
       }
     } else if (msg == MSG_SELECT_CHAIN) {
       if (option[0] == 'c') {
@@ -1692,35 +1706,41 @@ private:
         }
         _set_obs_action_act(feat, i, act, offset);
 
-        _set_obs_action_spec(feat, i, 0, spec, spec2index);
+        _set_obs_action_spec(feat, i, 0, spec, spec2index, card_ids);
       }
     } else if (msg == MSG_SELECT_CARD || msg == MSG_SELECT_TRIBUTE || msg == MSG_SELECT_SUM) {
-      int k = 0;
-      size_t start = 0;
-      while (start < option.size()) {
-        size_t idx = option.find_first_of(" ", start);
-        if (idx == std::string::npos) {
-          auto spec = option.substr(start);
-          _set_obs_action_spec(feat, i, k, spec, spec2index);
-          break;
-        } else {
-          auto spec = option.substr(start, idx - start);
-          _set_obs_action_spec(feat, i, k, spec, spec2index);
-          k++;
-          start = idx + 1;
+      if (spec2index.empty()) {
+        for (int k = 0; k < card_ids.size(); ++k) {
+          _set_obs_action_spec(feat, i, k, option, spec2index, card_ids);
+        }
+      } else {
+        int k = 0;
+        size_t start = 0;
+        while (start < option.size()) {
+          size_t idx = option.find_first_of(" ", start);
+          if (idx == std::string::npos) {
+            auto spec = option.substr(start);
+            _set_obs_action_spec(feat, i, k, spec, spec2index, {});
+            break;
+          } else {
+            auto spec = option.substr(start, idx - start);
+            _set_obs_action_spec(feat, i, k, spec, spec2index, {});
+            k++;
+            start = idx + 1;
+          }
         }
       }
     } else if (msg == MSG_SELECT_UNSELECT_CARD) {
       if (option[0] == 'f') {
         _set_obs_action_cancel_finish(feat, i, option[0]);
       } else {
-        _set_obs_action_spec(feat, i, 0, option, spec2index);
+        _set_obs_action_spec(feat, i, 0, option, spec2index, card_ids);
       }
     } else if (msg == MSG_SELECT_POSITION) {
       _set_obs_action_position(feat, i, option[0]);
     } else if (msg == MSG_SELECT_EFFECTYN) {
       auto spec = option.substr(2);
-      _set_obs_action_spec(feat, i, 0, spec, spec2index);
+      _set_obs_action_spec(feat, i, 0, spec, spec2index, card_ids);
 
       _set_obs_action_yesno(feat, i, option[0]);
     } else if (msg == MSG_SELECT_YESNO) {
@@ -1732,7 +1752,7 @@ private:
         auto act = option[0];
         auto spec = option.substr(2);
         _set_obs_action_act(feat, i, act);
-        _set_obs_action_spec(feat, i, 0, spec, spec2index);
+        _set_obs_action_spec(feat, i, 0, spec, spec2index, card_ids);
       }
     } else if (msg == MSG_SELECT_OPTION) {
       _set_obs_action_option(feat, i, option[0]);
@@ -1745,7 +1765,7 @@ private:
     }
   }
 
-  uint8_t spec_to_card_id(const std::string &spec, PlayerId player) {
+  CardId spec_to_card_id(const std::string &spec, PlayerId player) {
     int offset = 0;
     if (spec[0] == 'o') {
       player = 1 - player;
@@ -1842,37 +1862,35 @@ private:
     state["info:num_options"_] = n_options;
 
     // update h_card_ids from state
-    // auto &h_card_ids = to_play_ == 0 ? h_card_ids_0_ : h_card_ids_1_;
+    auto &h_card_ids = to_play_ == 0 ? h_card_ids_0_ : h_card_ids_1_;
 
-    // for (int i = 0; i < n_options; ++i) {
-    //   std::vector<CardId> card_ids;
-    //   for (int j = 0; j < 3; ++j) {
-    //     uint8_t spec_index = state["obs:actions_"_](i, j);
-    //     if (spec_index == 0) {
-    //       break;
-    //     }
-    //     card_ids.push_back(state["obs:card_ids_"_](spec_index - 1));
-    //   }
-    //   h_card_ids[i] = card_ids;
-    // }
+    for (int i = 0; i < n_options; ++i) {
+      std::vector<CardId> card_ids;
+      for (int j = 0; j < spec_.config["max_multi_select"_]; ++j) {
+        uint8_t spec_index = state["obs:actions_"_](i, 2*j+1);
+        if (spec_index == 0) {
+          break;
+        }
+        // because of na_card_embed, we need to subtract 1
+        uint16_t card_id1 = static_cast<uint16_t>(state["obs:cards_"_](spec_index - 1, 0));
+        uint16_t card_id2 = static_cast<uint16_t>(state["obs:cards_"_](spec_index - 1, 1));
+        card_ids.push_back((card_id1 << 8) + card_id2);
+      }
+      h_card_ids[i] = card_ids;
+    }
 
     // write history actions
 
-    // const auto &ha_p = to_play_ == 0 ? ha_p_0_ : ha_p_1_;
-    // const auto &history_actions =
-    //     to_play_ == 0 ? history_actions_0_ : history_actions_1_;
-    // int n1 = n_history_actions_ - ha_p;
-    // int n_action_feats = state["obs:actions_"_].Shape()[1] - 1;
+    const auto &ha_p = to_play_ == 0 ? ha_p_0_ : ha_p_1_;
+    const auto &history_actions =
+        to_play_ == 0 ? history_actions_0_ : history_actions_1_;
+    int n1 = n_history_actions_ - ha_p;
+    int n_action_feats = state["obs:actions_"_].Shape()[1];
 
-    // state["obs:h_action_ids_"_].Assign(
-    //   (uint8_t *)history_actions[ha_p].Data(), n_action_feats * n1);
-    // state["obs:h_actions_"_][n1].Assign(
-    //   (uint8_t *)history_actions.Data(), n_action_feats * ha_p);
-
-    // state["obs:h_actions_"_].Assign(
-    //   (uint8_t *)history_actions[ha_p].Data(), n_action_feats * n1);
-    // state["obs:h_actions_"_][n1].Assign(
-    //   (uint8_t *)history_actions.Data(), n_action_feats * ha_p);
+    state["obs:h_actions_"_].Assign(
+      (uint8_t *)history_actions[ha_p].Data(), n_action_feats * n1);
+    state["obs:h_actions_"_][n1].Assign(
+      (uint8_t *)history_actions.Data(), n_action_feats * ha_p);
   }
 
   void show_decision(int idx) {
@@ -1932,8 +1950,8 @@ private:
         if ((play_mode_ == kSelfPlay) || (to_play_ == ai_player_)) {
           if (options_.size() == 1) {
             callback_(0);
-            // update_h_card_ids(to_play_, 0);
-            // update_history_actions(to_play_, 0);
+            update_h_card_ids(to_play_, 0);
+            update_history_actions(to_play_, 0);
             if (verbose_) {
               show_decision(0);
             }
@@ -3013,10 +3031,10 @@ private:
       auto max = read_u8();
       auto size = read_u8();
 
-      if (min > 3) {
-        throw std::runtime_error("Min > 3 not implemented for select card");
+      if (min > spec_.config["max_multi_select"_]) {
+        throw std::runtime_error("Min > " + std::to_string(spec_.config["max_multi_select"_]) + " not implemented for select card");
       }
-      max = std::min(max, uint8_t(3));
+      max = std::min(max, uint8_t(spec_.config["max_multi_select"_]));
 
       std::vector<std::string> specs;
       specs.reserve(size);
