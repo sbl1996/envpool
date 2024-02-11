@@ -1,35 +1,14 @@
-/*
- * Copyright 2021 Garena Online Private Limited
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
 #ifndef ENVPOOL_YGOPRO_YGOPRO_H_
 #define ENVPOOL_YGOPRO_YGOPRO_H_
 
 // clang-format off
-#include <cctype>
-#include <cstddef>
-#include <cstdint>
-#include <cstdio>
-#include <optional>
+#include <string>
 #include <fstream>
 #include <shared_mutex>
 
 #include <SQLiteCpp/SQLiteCpp.h>
 #include <SQLiteCpp/VariadicBind.h>
 #include <ankerl/unordered_dense.h>
-#include <string>
 
 #include "envpool2/core/async_envpool.h"
 #include "envpool2/core/env.h"
@@ -314,7 +293,11 @@ static const ankerl::unordered_dense::map<int, std::string> system_strings = {
     {30, "Replay rules apply. Continue this attack?"},
     {31, "Attack directly with this monster?"},
     {96, "Use the effect of [%ls] to avoid destruction?"},
-    {221, "On [%ls], Activate Trigger Effect of [%ls]?"}};
+    {221, "On [%ls], Activate Trigger Effect of [%ls]?"},
+    {1190, "Add to hand"},
+    {1192, "Banish"},
+    {1622, "[%ls] Missed timing"}
+};
 
 static std::string get_system_string(int desc) {
   auto it = system_strings.find(desc);
@@ -1194,7 +1177,7 @@ public:
                     "play_mode"_.Bind(std::string("bot")),
                     "verbose"_.Bind(false), "max_options"_.Bind(16),
                     "max_cards"_.Bind(75), "n_history_actions"_.Bind(16),
-                    "max_multi_select"_.Bind(4));
+                    "max_multi_select"_.Bind(5));
   }
   template <typename Config>
   static decltype(auto) StateSpec(const Config &conf) {
@@ -2554,6 +2537,21 @@ private:
       for (int i = 0; i < size; ++i) {
         pl->notify(std::to_string(i + 1) + ": " + cards[i].name_);
       }
+    } else if (msg_ == MSG_MISSED_EFFECT) {
+      if (!verbose_) {
+        dp_ = dl_;
+        return;
+      }
+      dp_ += 4;
+      CardCode code = read_u32();
+      Card card = c_get_card(code);
+      for (PlayerId pl = 0; pl < 2; pl++) {
+        auto spec = card.get_spec(pl);
+        auto str = get_system_string(1622);
+        std::string fmt_str = "[%ls]";
+        str = str.replace(str.find(fmt_str), fmt_str.length(), card.name_);
+        players_[pl]->notify(str);
+      }
     } else if (msg_ == MSG_SORT_CARD) {
       // TODO: implement action
       if (!verbose_) {
@@ -2846,7 +2844,7 @@ private:
       auto tpos = (target >> 24) & 0xff;
 
       Card acard = get_card(ac, aloc, aseq);
-      std::optional<Card> tcard;
+      Card tcard;
       if (tloc != 0) {
         tcard = get_card(tc, tloc, tseq);
       }
@@ -2858,15 +2856,15 @@ private:
         } else {
           attacker_points = std::to_string(aa) + "/" + std::to_string(ad);
         }
-        if (tcard.has_value()) {
+        if (tloc != 0) {
           std::string defender_points;
-          if (tcard->type_ & TYPE_LINK) {
+          if (tcard.type_ & TYPE_LINK) {
             defender_points = std::to_string(da);
           } else {
             defender_points = std::to_string(da) + "/" + std::to_string(dd);
           }
           pl->notify(acard.name_ + "(" + attacker_points + ")" + " attacks " +
-                     tcard->name_ + " (" + defender_points + ")");
+                     tcard.name_ + " (" + defender_points + ")");
         } else {
           pl->notify(acard.name_ + "(" + attacker_points + ")" + " attacks");
         }
@@ -3032,6 +3030,7 @@ private:
       auto size = read_u8();
 
       if (min > spec_.config["max_multi_select"_]) {
+        printf("min: %d, max: %d, size: %d\n", min, max, size);
         throw std::runtime_error("Min > " + std::to_string(spec_.config["max_multi_select"_]) + " not implemented for select card");
       }
       max = std::min(max, uint8_t(spec_.config["max_multi_select"_]));
