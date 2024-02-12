@@ -913,6 +913,8 @@ static ankerl::unordered_dense::map<std::string, std::vector<CardCode>>
     main_decks_;
 static ankerl::unordered_dense::map<std::string, std::vector<CardCode>>
     extra_decks_;
+static std::vector<std::string> deck_names_;
+
 
 inline const Card &c_get_card(CardCode code) { return cards_.at(code); }
 
@@ -1045,6 +1047,9 @@ static void init_module(const std::string &db_path,
     std::vector<CardCode> extra_deck = read_extra_deck(deck);
     main_decks_[name] = main_deck;
     extra_decks_[name] = extra_deck;
+    if (name[0] != '_') {
+      deck_names_.push_back(name);
+    }
 
     preload_deck(db, main_deck);
     preload_deck(db, extra_deck);
@@ -1233,6 +1238,8 @@ inline std::vector<PlayMode> parse_play_modes(const std::string &play_mode) {
 
 class YGOProEnv : public Env<YGOProEnvSpec> {
 protected:
+  std::string deck1_;
+  std::string deck2_;
   std::vector<uint32> main_deck0_;
   std::vector<uint32> main_deck1_;
   std::vector<uint32> extra_deck0_;
@@ -1252,7 +1259,7 @@ protected:
   PlayerId ai_player_;
 
   intptr_t pduel_;
-  Player *players_[2];
+  Player *players_[2]; //  abstract class must be pointer
 
   std::uniform_int_distribution<uint64_t> dist_int_;
   bool done_{true};
@@ -1267,6 +1274,7 @@ protected:
   // turn player
   PlayerId tp_;
   int current_phase_;
+  int turn_count_;
 
   int msg_;
   std::vector<std::string> options_;
@@ -1312,10 +1320,7 @@ public:
       : Env<YGOProEnvSpec>(spec, env_id),
         max_episode_steps_(spec.config["max_episode_steps"_]),
         elapsed_step_(max_episode_steps_ + 1), dist_int_(0, 0xffffffff),
-        main_deck0_(main_decks_.at(spec.config["deck1"_])),
-        main_deck1_(main_decks_.at(spec.config["deck2"_])),
-        extra_deck0_(extra_decks_.at(spec.config["deck1"_])),
-        extra_deck1_(extra_decks_.at(spec.config["deck2"_])),
+        deck1_(spec.config["deck1"_]), deck2_(spec.config["deck2"_]),
         player_(spec.config["player"_]),
         play_modes_(parse_play_modes(spec.config["play_mode"_])),
         verbose_(spec.config["verbose"_]),
@@ -1367,10 +1372,12 @@ public:
       }
     }
 
-    // history_actions_0_.Zero();
-    // history_actions_1_.Zero();
-    // ha_p_0_ = 0;
-    // ha_p_1_ = 0;
+    turn_count_ = 0;
+
+    history_actions_0_.Zero();
+    history_actions_1_.Zero();
+    ha_p_0_ = 0;
+    ha_p_1_ = 0;
 
     unsigned long duel_seed = dist_int_(gen_);
 
@@ -1460,11 +1467,20 @@ public:
     float reward = 0;
     int reason = 0;
     if (done_) {
+      float base_reward = 1.0;
+      int win_turn = turn_count_ - winner_;
+      if (win_turn <= 5) {
+        base_reward = 2.0;
+      } else if (win_turn <= 3) {
+        base_reward = 4.0;
+      } else if (win_turn <= 1) {
+        base_reward = 8.0;
+      }
       if (play_mode_ == kSelfPlay) {
         // to_play_ is the previous player
-        reward = winner_ == to_play_ ? 1.0 : -1.0;
+        reward = winner_ == to_play_ ? base_reward : -base_reward;
       } else {
-        reward = winner_ == ai_player_ ? 1.0 : -1.0;
+        reward = winner_ == ai_player_ ? base_reward : -base_reward;
       }
 
       if (win_reason_ == 0x01) {
@@ -1889,9 +1905,18 @@ private:
   }
 
   void load_deck(PlayerId player, bool shuffle = true) {
+    std::string deck = player == 0 ? deck1_ : deck2_;
     std::vector<CardCode> &main_deck = player == 0 ? main_deck0_ : main_deck1_;
-    std::vector<CardCode> &extra_deck =
-        player == 0 ? extra_deck0_ : extra_deck1_;
+    std::vector<CardCode> &extra_deck = player == 0 ? extra_deck0_ : extra_deck1_;
+
+    if (deck == "random") {
+      // generate random deck name
+      std::uniform_int_distribution<uint64_t> dist_int(0, deck_names_.size() - 1);
+      deck = deck_names_[dist_int(gen_)];
+    }
+
+    main_deck = main_decks_.at(deck);
+    extra_deck = extra_decks_.at(deck);
 
     if (shuffle) {
       std::shuffle(main_deck.begin(), main_deck.end(), gen_);
@@ -2198,6 +2223,7 @@ private:
       op->notify("Opponent drew " + std::to_string(drawed) + " cards.");
     } else if (msg_ == MSG_NEW_TURN) {
       tp_ = int(read_u8());
+      turn_count_++;
       if (!verbose_) {
         return;
       }
